@@ -25,6 +25,15 @@ chrome.runtime.onStartup?.addListener(async () => {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "GET_SNAPSHOT") {
     sendResponse({ games: lastGames });
+    return; // no async
+  }
+  if (msg?.type === "SETTINGS_UPDATED") {
+    (async () => {
+      await schedule();
+      await pollOnce();
+      sendResponse?.({ ok: true });
+    })();
+    return true; 
   }
 });
 
@@ -70,27 +79,64 @@ async function broadcast(msg: any) {
 }
 
 async function generateMockGamesForFollowed(): Promise<{ games: Game[] }> {
-  const teams = await getFollowedTeams();
-  if (!teams.length) return { games: [] };
+  const followed = await getFollowedTeams();
+  if (!followed.length) return { games: [] };
 
-  const pairs: [FollowedTeam, FollowedTeam][] = [];
-  for (let i = 0; i < teams.length; i += 2) {
-    const a = teams[i];
-    const b = teams[i + 1] ?? teams[0];
-    if (a && b && a.teamId !== b.teamId && a.league === b.league) pairs.push([a, b]);
+  // Group by league
+  const byLeague = new Map<string, FollowedTeam[]>();
+  for (const t of followed) {
+    const arr = byLeague.get(t.league) ?? [];
+    arr.push(t);
+    byLeague.set(t.league, arr);
   }
 
   const now = Date.now();
-  const games: Game[] = pairs.map(([home, away], idx) => ({
-    league: home.league,
-    home: { teamId: home.teamId, name: home.name, score: Math.floor(Math.random() * 120) },
-    away: { teamId: away.teamId, name: away.name, score: Math.floor(Math.random() * 120) },
-    status: {
-      phase: "live",
-      clock: `Q${(idx % 4) + 1} 0${Math.floor(Math.random()*9)}:${Math.floor(Math.random()*59).toString().padStart(2,"0")}`
-    },
-    startTime: now - 1000 * 60 * 30,
-  }));
+  const games: Game[] = [];
+
+  for (const teams of byLeague.values()) {
+    if (teams.length === 1) {
+      // With one team, just fabricate an opponent label in same league
+      const a = teams[0];
+      games.push({
+        league: a.league,
+        home: { teamId: a.teamId, name: a.name, score: randScore(70, 120) },
+        away: { teamId: "XXX", name: "Opponent", score: randScore(70, 120) },
+        status: { phase: "live", clock: randomClock() },
+        startTime: now - 1000 * 60 * 30,
+      } as Game);
+      continue;
+    }
+
+    // Round-robin pairs within the league
+    // Example: [A,B,C,D,E] -> (A vs B), (C vs D), (E vs A)
+    for (let i = 0; i < teams.length; i += 2) {
+      const home = teams[i];
+      const away = teams[(i + 1) % teams.length]; // wrap to keep same league
+      if (!home || !away) continue;
+
+      games.push({
+        league: home.league,
+        home: { teamId: home.teamId, name: home.name, score: randScore(70, 120) },
+        away: { teamId: away.teamId, name: away.name, score: randScore(70, 120) },
+        status: { phase: "live", clock: randomClock() },
+        startTime: now - 1000 * 60 * 30,
+      } as Game);
+    }
+  }
+
+  // Optional: shuffle to mix leagues visually
+  games.sort(() => Math.random() - 0.5);
 
   return { games };
+}
+
+// helpers
+function randScore(min: number, max: number) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+function randomClock() {
+  const q = Math.floor(Math.random() * 4) + 1;
+  const m = Math.floor(Math.random() * 10);
+  const s = Math.floor(Math.random() * 60).toString().padStart(2, "0");
+  return `Q${q} 0${m}:${s}`;
 }
