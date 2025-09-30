@@ -328,6 +328,23 @@ function Options() {
               <span>Compact bar</span>
             </label>
 
+            {/* Theme */}
+            <label style={{ display: 'block', marginBottom: 12 }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>Theme</div>
+              <select
+                value={settings.theme ?? "auto"}
+                onChange={e => setLocalSettings({ ...settings, theme: e.target.value as any })}
+                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb', width: 180 }}
+              >
+                <option value="auto">Auto (system)</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+              </select>
+              <div style={{ color: '#64748b', fontSize: 12, marginTop: 4 }}>
+                Auto follows your OS appearance.
+              </div>
+            </label>
+            
             {/* Followed summary */}
             <div style={{ marginTop: 12 }}>
               <strong>Following ({selected.length}):</strong>

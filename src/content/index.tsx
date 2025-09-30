@@ -49,10 +49,54 @@ function layoutGuess() {
   return { pad, vw, widthGuess, left, right };
 }
 
+// Theme colors
+type Theme = "light" | "dark" | "auto";
 
+interface ThemeColors {
+  cardBg: string;
+  cardBorder: string;
+  textPrimary: string;
+  textSecondary: string;
+  abbrevBg: string;
+  abbrevText: string;
+  dragHandle: string;
+  dragHandleHover: string;
+  logoBg: string;
+}
 
-function Card({ g, compact }: { g: Game; compact: boolean }) {
-  const Side = ({ s, side }: { s: Game["home"]; side: "home" | "away" }) => {
+function getThemeColors(theme: Theme): ThemeColors {
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const isDark = theme === "dark" || (theme === "auto" && prefersDark);
+
+  if (isDark) {
+    return {
+      cardBg: "#0b1220",
+      cardBorder: "#1e293b",
+      textPrimary: "#fff",
+      textSecondary: "#e5e7eb",
+      abbrevBg: "#334155",
+      abbrevText: "#e5e7eb",
+      dragHandle: "rgba(148,163,184,.85)",
+      dragHandleHover: "rgba(148,163,184,1)",
+      logoBg: "#111827",
+    };
+  } else {
+    return {
+      cardBg: "#ffffff",
+      cardBorder: "#e5e7eb",
+      textPrimary: "#0f172a",
+      textSecondary: "#475569",
+      abbrevBg: "#e2e8f0",
+      abbrevText: "#475569",
+      dragHandle: "rgba(100,116,139,.85)",
+      dragHandleHover: "rgba(100,116,139,1)",
+      logoBg: "#f8fafc",
+    };
+  }
+}
+
+function Card({ g, compact, colors }: { g: Game; compact: boolean; colors: ThemeColors }) {
+  const Side = ({ s }: { s: Game["home"]; side: "home" | "away" }) => {
     const [imgOk, setImgOk] = useState(true);
     const abbr = s.teamId?.toUpperCase?.() || abbrevFromName(s.name);
     const logoUrl = s.logo;
@@ -63,13 +107,13 @@ function Card({ g, compact }: { g: Game; compact: boolean }) {
           width: size,
           height: size,
           borderRadius: 9999,
-          background: "#334155",
+          background: colors.abbrevBg,
           display: "grid",
           placeItems: "center",
           fontSize: Math.max(10, Math.round(size * 0.45)),
           fontWeight: 700,
           letterSpacing: 0.3,
-          color: "#e5e7eb",
+          color: colors.abbrevText,
         }}
       >
         {abbr}
@@ -83,7 +127,7 @@ function Card({ g, compact }: { g: Game; compact: boolean }) {
           alt={s.name}
           referrerPolicy="no-referrer"
           onError={() => setImgOk(false)}
-          style={{ width: size, height: size, borderRadius: 9999, objectFit: "cover", background: "#111827" }}
+          style={{ width: size, height: size, borderRadius: 9999, objectFit: "cover", background: colors.logoBg }}
         />
       ) : (
         <CircleAbbr size={size} />
@@ -91,9 +135,21 @@ function Card({ g, compact }: { g: Game; compact: boolean }) {
 
     if (compact) {
       return (
-        <div style={{ display: "grid", placeItems: side === "home" ? "end" : "start", gap: 4, minWidth: 36 }}>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 4,
+            minWidth: 36,
+            textAlign: "center",
+          }}
+        >
           <LogoOrAbbr size={22} />
-          <span style={{ fontSize: 12, opacity: 0.9, color: "#e5e7eb" }}>{s.score}</span>
+          <span style={{ fontSize: 12, opacity: 0.9, color: colors.textSecondary, lineHeight: 1 }}>
+            {s.score}
+          </span>
         </div>
       );
     }
@@ -102,14 +158,13 @@ function Card({ g, compact }: { g: Game; compact: boolean }) {
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <LogoOrAbbr size={20} />
         <div style={{ display: "grid", lineHeight: 1.1 }}>
-          <strong style={{ fontSize: 12, color: "#fff" }}>{s.name}</strong>
-          <span style={{ fontSize: 11, opacity: 0.85, color: "#e5e7eb" }}>{s.score}</span>
+          <strong style={{ fontSize: 12, color: colors.textPrimary }}>{s.name}</strong>
+          <span style={{ fontSize: 11, opacity: 0.85, color: colors.textSecondary }}>{s.score}</span>
         </div>
       </div>
     );
   };
 
-  // Friendly day/time for upcoming games
   const formatShort = (ts: number) => {
     try {
       const d = new Date(ts);
@@ -127,12 +182,12 @@ function Card({ g, compact }: { g: Game; compact: boolean }) {
         gap: compact ? 8 : 12,
         alignItems: "center",
         padding: compact ? "6px 8px" : "8px 10px",
-        background: "#0b1220",
-        color: "#fff",
+        background: colors.cardBg,
+        color: colors.textPrimary,
         borderRadius: 12,
-        border: "1px solid #1e293b",
+        border: `1px solid ${colors.cardBorder}`,
         boxShadow: "0 8px 24px rgba(2,6,23,0.35)",
-        width: "auto", 
+        width: "auto",
       }}
     >
       <div style={{ justifySelf: "start" }}>
@@ -157,16 +212,19 @@ function Card({ g, compact }: { g: Game; compact: boolean }) {
   );
 }
 
-
 function Bar() {
   const [games, setGames] = useState<Game[]>([]);
   const [showBar, setShowBar] = useState(true);
   const [compact, setCompact] = useState(true);
+  const [theme, setTheme] = useState<Theme>("auto");
 
   // Drag state
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number } | null>(null);
+
+  // Theme colors
+  const colors = getThemeColors(theme);
 
   const clampToViewport = (x: number, y: number) => {
     const { vw, widthGuess } = layoutGuess();
@@ -208,6 +266,7 @@ function Bar() {
       const s = res.settings ?? {};
       setShowBar(s.showBar ?? true);
       setCompact(s.compact ?? true);
+      setTheme(s.theme ?? "auto");
       if (s.barPos && typeof s.barPos.x === "number" && typeof s.barPos.y === "number") {
         setPos(clampToViewport(s.barPos.x, s.barPos.y));
       } else {
@@ -222,6 +281,7 @@ function Bar() {
         const next = changes.settings.newValue ?? {};
         if (typeof next.showBar !== "undefined") setShowBar(next.showBar);
         if (typeof next.compact !== "undefined") setCompact(next.compact);
+        if (typeof next.theme !== "undefined") setTheme(next.theme);
         if (next.barPos && typeof next.barPos.x === "number" && typeof next.barPos.y === "number") {
           setPos(clampToViewport(next.barPos.x, next.barPos.y));
         }
@@ -230,6 +290,20 @@ function Bar() {
     chrome.storage.onChanged.addListener(onChange);
     return () => chrome.storage.onChanged.removeListener(onChange);
   }, []);
+
+  // Listen for system theme changes when in auto mode
+  useEffect(() => {
+    if (theme !== "auto") return;
+    
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = () => {
+      // Force re-render by updating a dummy state or just let colors recalculate
+      setTheme("auto");
+    };
+    
+    mediaQuery.addEventListener("change", handler);
+    return () => mediaQuery.removeEventListener("change", handler);
+  }, [theme]);
 
   // Get initial snapshot + subscribe to push updates
   useEffect(() => {
@@ -332,7 +406,7 @@ function Bar() {
     width: 60,
     height: 8,
     borderRadius: 9999,
-    background: "rgba(148,163,184,.85)",
+    background: colors.dragHandle,
     marginBottom: 8,
     cursor: isDragging ? "grabbing" : "grab",
     transition: isDragging ? "none" : "background-color 0.15s ease",
@@ -343,7 +417,6 @@ function Bar() {
   const nearRight = Math.abs(pos.x - right) < 0.5;
   const isVertical = nearLeft || nearRight;
 
-  // width the column will use when vertical
   const columnWidth = widthGuess;
 
   return (
@@ -353,10 +426,10 @@ function Bar() {
         onMouseDown={handleMouseDown}
         onTouchStart={handleTouchStart}
         onMouseEnter={(e) => {
-          if (!isDragging) (e.target as HTMLElement).style.background = "rgba(148,163,184,1)";
+          if (!isDragging) (e.target as HTMLElement).style.background = colors.dragHandleHover;
         }}
         onMouseLeave={(e) => {
-          if (!isDragging) (e.target as HTMLElement).style.background = "rgba(148,163,184,.85)";
+          if (!isDragging) (e.target as HTMLElement).style.background = colors.dragHandle;
         }}
       />
       <div
@@ -367,7 +440,7 @@ function Bar() {
               flexDirection: "column",
               flexWrap: "nowrap",
               gap: compact ? 8 : 10,
-              width: columnWidth,          // force 1-per-row
+              width: columnWidth,
               pointerEvents: "auto",
             }
             : {
@@ -382,13 +455,12 @@ function Bar() {
         {games.map((game, i) => (
           <div
             key={`${game.league}-${game.home.teamId}-${game.away.teamId}-${game.startTime}-${i}`}
-            style={isVertical ? { width: "100%" } : undefined}   // stretch card when vertical
+            style={isVertical ? { width: "100%" } : undefined}
           >
-            <Card g={game} compact={compact} />
+            <Card g={game} compact={compact} colors={colors} />
           </div>
         ))}
       </div>
-
     </div>
   );
 }
