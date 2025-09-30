@@ -5,6 +5,17 @@ const KEYS = {
   settings: "settings",
 } as const;
 
+const DEFAULT_PROXY_URL = "https://sportscanner-proxy.semiultra.workers.dev";
+
+export async function getProxyUrl(): Promise<string> {
+  const { proxyUrl } = await chrome.storage.local.get("proxyUrl");
+  return proxyUrl || DEFAULT_PROXY_URL;
+}
+
+export async function setProxyUrl(url: string): Promise<void> {
+  await chrome.storage.local.set({ proxyUrl: url });
+}
+
 export async function getFollowedTeams(): Promise<FollowedTeam[]> {
   const res = await chrome.storage.sync.get([KEYS.teams]);
   return (res[KEYS.teams] as FollowedTeam[]) ?? [];

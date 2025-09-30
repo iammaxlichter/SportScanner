@@ -18,7 +18,7 @@
         "tabs"
     ],
     "host_permissions": [
-        "https://example-scores-api.com/*"
+        "https://sportscanner-proxy.semiultra.workers.dev/*"
     ],
     "content_scripts": [
         {
@@ -28,7 +28,8 @@
             ],
             "js": [
                 "src/content/index.tsx"
-            ]
+            ],
+            "run_at": "document_idle"
         }
     ]
 }

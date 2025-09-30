@@ -4,7 +4,7 @@ export type FollowedTeam = {
   league: League;
   teamId: string;
   name: string;
-  logo?: string; 
+  logo?: string;
 };
 
 export type Settings = {
@@ -21,5 +21,5 @@ export type Game = {
   home: TeamSide;
   away: TeamSide;
   status: { phase: "pre" | "live" | "final"; clock?: string };
-  startTime: number; 
+  startTime: number; // epoch ms
 };
