@@ -2,11 +2,40 @@
 import { getFollowedTeams, getSettings } from "../lib/storage";
 import type { Game, League } from "../lib/types";
 
+/* =====================
+   ID NORMALIZATION + ALIASES
+   ===================== */
+const L = (x: string) => x.toLowerCase();
+const T = (x: string) => x.toUpperCase();
 
+// Canonical (your app) -> proxy token
+const TEAM_ID_TO_PROXY: Partial<Record<League, Record<string, string>>> = {
+  ncaaf: { TAMU: "TA&M" }, // Texas A&M
+};
+
+// Proxy token -> Canonical (your app)
+const TEAM_ID_FROM_PROXY: Partial<Record<League, Record<string, string>>> = {
+  ncaaf: { "TA&M": "TAMU" }, // Texas A&M
+};
+
+function toProxyId(league: League, id: string) {
+  return TEAM_ID_TO_PROXY[league]?.[id] ?? id;
+}
+function toCanonicalId(league: League, idFromApi: string) {
+  return TEAM_ID_FROM_PROXY[league]?.[idFromApi] ?? idFromApi;
+}
+const canonId = (league: League, id: string) => T(toCanonicalId(league, id));
+
+/* =====================
+   Snapshots + change detection
+   ===================== */
 let prevByKey = new Map<string, Game>();
 
 function gameKey(g: Game) {
-  return `${g.league}:${g.home.teamId}-${g.away.teamId}@${g.startTime}`;
+  const lg = L(g.league) as League;
+  const home = canonId(lg, g.home.teamId);
+  const away = canonId(lg, g.away.teamId);
+  return `${lg}:${home}-${away}@${g.startTime}`;
 }
 
 function detectMeaningfulChanges(next: Game[]): Game[] {
@@ -26,23 +55,21 @@ function detectMeaningfulChanges(next: Game[]): Game[] {
   return changes;
 }
 
-
-// =====================
-// Config
-// =====================
+/* =====================
+   Config
+   ===================== */
 const PROXY_URL = "https://sportscanner-proxy.semiultra.workers.dev";
 
-// =====================
-// State
-// =====================
+/* =====================
+   State
+   ===================== */
 let lastGames: Game[] = [];
 
-// Run on every service-worker load (reload/update)
+/* =====================
+   Lifecycle
+   ===================== */
 init().catch(console.error);
 
-// =====================
-// Lifecycle
-// =====================
 chrome.runtime.onInstalled.addListener(async (details) => {
   if (details.reason === "install") {
     chrome.runtime.openOptionsPage();
@@ -80,9 +107,9 @@ chrome.alarms.onAlarm.addListener(async (a: chrome.alarms.Alarm) => {
   }
 });
 
-// =====================
-// Core
-// =====================
+/* =====================
+   Core
+   ===================== */
 async function init() {
   console.log("[SportScanner] service worker loaded");
   await schedule();
@@ -100,7 +127,7 @@ async function schedule() {
 async function pollOnce() {
   try {
     const games = await fetchLiveGamesForFollowed();
-
+    lastGames = games;
     if (prevByKey.size === 0) {
       prevByKey = new Map(games.map(g => [gameKey(g), g]));
     } else {
@@ -144,34 +171,45 @@ async function broadcast(msg: any) {
   );
 }
 
-// =====================
-// Fetching from Proxy
-// =====================
+/* =====================
+   Fetching from Proxy
+   ===================== */
 async function fetchLiveGamesForFollowed(): Promise<Game[]> {
   const followed = await getFollowedTeams();
 
   // Group teamIds by league for 1 request per league
   const byLeague = new Map<League, string[]>();
   for (const t of followed) {
-    const arr = byLeague.get(t.league) ?? [];
-    arr.push(t.teamId.toUpperCase());
-    byLeague.set(t.league, arr);
+    const key = L(t.league) as League;
+    const arr = byLeague.get(key) ?? [];
+    arr.push(T(t.teamId)); // store canonical uppercase IDs
+    byLeague.set(key, arr);
   }
 
   if (byLeague.size === 0) {
     byLeague.set("nfl", ["DAL", "PHI"]);
   }
 
-  // 1) Fetch today's games per league
+  // 1) Fetch today's games per league (lenient per league)
   const leagueToday = await Promise.all(
     Array.from(byLeague.entries()).map(async ([league, teamIds]) => {
-      const url = new URL(PROXY_URL);
-      url.searchParams.set("league", league);
-      teamIds.forEach((id) => url.searchParams.append("team", id));
-      const res = await fetch(url.toString());
-      if (!res.ok) throw new Error(`Proxy ${league} today ${res.status}`);
-      const data = (await res.json()) as { games: Game[] };
-      return { league, teamIds, games: data.games ?? [] };
+      try {
+        const url = new URL(PROXY_URL);
+        url.searchParams.set("league", L(league));
+        url.searchParams.set("mode", "today");
+        teamIds.forEach((id) => url.searchParams.append("team", toProxyId(league, id)));
+
+        const res = await fetch(url.toString());
+        if (!res.ok) {
+          console.warn(`[SportScanner] Proxy ${league} today non-OK: ${res.status}`);
+          return { league, teamIds, games: [] as Game[] };
+        }
+        const data = (await res.json()) as { games: Game[] };
+        return { league, teamIds, games: data.games ?? [] };
+      } catch (err) {
+        console.warn(`[SportScanner] Proxy ${league} today error:`, err);
+        return { league, teamIds, games: [] as Game[] };
+      }
     })
   );
 
@@ -179,9 +217,9 @@ async function fetchLiveGamesForFollowed(): Promise<Game[]> {
   const leagueNext = await Promise.all(
     leagueToday.map(async ({ league, teamIds }) => {
       const url = new URL(PROXY_URL);
-      url.searchParams.set("league", league);
+      url.searchParams.set("league", L(league));
       url.searchParams.set("mode", "next");
-      teamIds.forEach((id) => url.searchParams.append("team", id));
+      teamIds.forEach((id) => url.searchParams.append("team", toProxyId(league, id)));
       const res = await fetch(url.toString());
       if (!res.ok) return { league, upcoming: [] as Game[] }; // be lenient
       const data = (await res.json()) as { games: Game[] };
@@ -189,12 +227,15 @@ async function fetchLiveGamesForFollowed(): Promise<Game[]> {
     })
   );
 
-  // Build a quick index for upcoming by team
+  // Build a quick index for upcoming by team, keyed by league+team (canonical ids)
   const upcomingByTeam = new Map<string, Game>();
   for (const { upcoming } of leagueNext) {
     for (const g of upcoming) {
-      upcomingByTeam.set(g.home.teamId.toUpperCase(), g);
-      upcomingByTeam.set(g.away.teamId.toUpperCase(), g);
+      const lg = L(g.league) as League;
+      const home = canonId(lg, g.home.teamId);
+      const away = canonId(lg, g.away.teamId);
+      upcomingByTeam.set(`${lg}:${home}`, g);
+      upcomingByTeam.set(`${lg}:${away}`, g);
     }
   }
 
@@ -203,40 +244,53 @@ async function fetchLiveGamesForFollowed(): Promise<Game[]> {
 
   const merged: Game[] = [];
 
-  for (const { teamIds, games } of leagueToday) {
-    // Track which teamIds are already "covered" by a recent game (live/pre or final within 2 days)
-    const covered = new Set<string>();
+  for (const { league, teamIds, games } of leagueToday) {
+    const lg = L(league) as League;
 
-    // Include today's relevant games that are:
-    // - live, or pre, or final but not older than 2 days
+    // Track which teamIds have ANY relevant "today" game (for showing "next" fallback)
+    const hasRelevantGame = new Set<string>();
+
+    // 1) Include ALL relevant games for followed teams (live, pre, or finals within window)
     for (const g of games) {
-      const isRecentFinal = g.status.phase === "final" ? (now - g.startTime) <= TWO_DAYS : true;
+      const home = canonId(lg, g.home.teamId);
+      const away = canonId(lg, g.away.teamId);
 
-      // If any followed team is in this game and it's recent enough, include it
-      const involvesFollowed =
-        teamIds.includes(g.home.teamId.toUpperCase()) || teamIds.includes(g.away.teamId.toUpperCase());
+      const isRecentFinal = g.status.phase === "final" ? (now - g.startTime) <= TWO_DAYS : true;
+      const involvesFollowed = teamIds.includes(home) || teamIds.includes(away);
 
       if (involvesFollowed && isRecentFinal) {
         merged.push(g);
-        if (teamIds.includes(g.home.teamId.toUpperCase())) covered.add(g.home.teamId.toUpperCase());
-        if (teamIds.includes(g.away.teamId.toUpperCase())) covered.add(g.away.teamId.toUpperCase());
+        if (teamIds.includes(home)) hasRelevantGame.add(home);
+        if (teamIds.includes(away)) hasRelevantGame.add(away);
       }
     }
 
-    // For teams not covered by a recent game, inject their next scheduled game
+    // 2) For teams without any relevant "today" game, inject their next scheduled game
     for (const id of teamIds) {
-      if (covered.has(id)) continue;
-      const nextG = upcomingByTeam.get(id);
+      if (hasRelevantGame.has(id)) continue;
+      const nextG = upcomingByTeam.get(`${lg}:${id}`);
       if (nextG) merged.push(nextG);
     }
   }
 
+  // Dedupe by league + matchup + start (using normalized key)
+  const uniq = new Map<string, Game>();
+  for (const g of merged) {
+    uniq.set(gameKey(g), g);
+  }
+  const result = Array.from(uniq.values());
+
   // Sort: live -> pre -> final; then by start time asc
-  merged.sort((a, b) => {
+  result.sort((a, b) => {
     const order = (g: Game) => (g.status.phase === "live" ? 0 : g.status.phase === "pre" ? 1 : 2);
     const o = order(a) - order(b);
     return o !== 0 ? o : a.startTime - b.startTime;
   });
 
-  return merged;
+  console.debug(
+    "[SportScanner] merged",
+    result.map(g => `${g.league.toUpperCase()} ${canonId(L(g.league) as League, g.away.teamId)}@${canonId(L(g.league) as League, g.home.teamId)} ${new Date(g.startTime).toLocaleString()}`)
+  );
+
+  return result;
 }

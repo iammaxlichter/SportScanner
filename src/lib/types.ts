@@ -1,4 +1,4 @@
-export type League = "nba" | "nfl" | "mlb" | "nhl";
+export type League = "nba" | "nfl" | "mlb" | "nhl" | "ncaaf";
 
 export type FollowedTeam = {
   league: League;

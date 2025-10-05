@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Game } from "../lib/types";
 
@@ -40,10 +40,18 @@ function abbrevFromName(name: string) {
   return letters.slice(0, 3);
 }
 
-function layoutGuess() {
-  const pad = 8;
+function barWidth(compact: boolean) {
   const vw = window.innerWidth;
-  const widthGuess = Math.min(167, Math.max(260, Math.floor(vw * 0.45)));
+  // Tweak these ranges to taste
+  return compact
+    ? 167 // narrower in compact
+    : Math.min(420, Math.max(260, Math.floor(vw * 0.50))); // wider in normal
+}
+
+function layoutGuess(compact: boolean) {
+  const pad = 24;
+  const vw = window.innerWidth;
+  const widthGuess = barWidth(compact);
   const left = pad;
   const right = vw - widthGuess - pad;
   return { pad, vw, widthGuess, left, right };
@@ -157,9 +165,35 @@ function Card({ g, compact, colors }: { g: Game; compact: boolean; colors: Theme
     return (
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <LogoOrAbbr size={20} />
-        <div style={{ display: "grid", lineHeight: 1.1 }}>
-          <strong style={{ fontSize: 12, color: colors.textPrimary }}>{s.name}</strong>
-          <span style={{ fontSize: 11, opacity: 0.85, color: colors.textSecondary }}>{s.score}</span>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            lineHeight: 1.1,
+          }}
+        >
+          <strong
+            style={{
+              fontSize: 12,
+              color: colors.textPrimary,
+              textAlign: "center",
+            }}
+          >
+            {s.name}
+          </strong>
+          <span
+            style={{
+              fontSize: 11,
+              opacity: 0.85,
+              color: colors.textSecondary,
+              textAlign: "center",
+              marginTop: 2,
+            }}
+          >
+            {s.score}
+          </span>
         </div>
       </div>
     );
@@ -187,7 +221,8 @@ function Card({ g, compact, colors }: { g: Game; compact: boolean; colors: Theme
         borderRadius: 12,
         border: `1px solid ${colors.cardBorder}`,
         boxShadow: "0 8px 24px rgba(2,6,23,0.35)",
-        width: "auto",
+        minWidth: 0,
+        maxWidth: "100%",
       }}
     >
       <div style={{ justifySelf: "start" }}>
@@ -222,26 +257,32 @@ function Bar() {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number } | null>(null);
+  const barRef = useRef<HTMLDivElement>(null);
 
   // Theme colors
   const colors = getThemeColors(theme);
 
-  const clampToViewport = (x: number, y: number) => {
-    const { vw, widthGuess } = layoutGuess();
-    const pad = 8;
+  const clampToViewport = (x: number, y: number, barWidth: number) => {
+    const pad = 12;
     const vh = window.innerHeight;
-    const heightGuess = 80;
-    const maxX = vw - widthGuess - pad;
-    const maxY = vh - heightGuess - pad;
+    const vw = window.innerWidth;
+    // Use actual bar height from ref, with better fallback
+    const barHeight = barRef.current?.offsetHeight || 80;
+    const maxX = vw - barWidth - pad;
+    const maxY = vh - barHeight - pad;
     return { x: Math.max(pad, Math.min(x, maxX)), y: Math.max(pad, Math.min(y, maxY)) };
   };
 
-  const snapToEdges = (x: number, y: number) => {
-    const { left, right } = layoutGuess();
-    const pad = 8, snap = 12;
+  const snapToEdges = (x: number, y: number, barWidth: number) => {
+    const { pad } = layoutGuess(compact);
+    const vw = window.innerWidth;
+    const left = pad;
+    const right = vw - barWidth - pad;
+    const snap = 16;
     const vh = window.innerHeight;
-    const heightGuess = 80;
-    const top = pad, bottom = vh - heightGuess - pad;
+    // Use actual bar height from ref, with better fallback
+    const barHeight = barRef.current?.offsetHeight || 80;
+    const top = pad, bottom = vh - barHeight - pad;
     const nx = Math.abs(x - left) < snap ? left : Math.abs(x - right) < snap ? right : x;
     const ny = Math.abs(y - top) < snap ? top : Math.abs(y - bottom) < snap ? bottom : y;
     return { x: nx, y: ny };
@@ -267,12 +308,13 @@ function Bar() {
       setShowBar(s.showBar ?? true);
       setCompact(s.compact ?? true);
       setTheme(s.theme ?? "auto");
+      const { widthGuess } = layoutGuess(compact);
       if (s.barPos && typeof s.barPos.x === "number" && typeof s.barPos.y === "number") {
-        setPos(clampToViewport(s.barPos.x, s.barPos.y));
+        setPos(clampToViewport(s.barPos.x, s.barPos.y, widthGuess));
       } else {
-        const defX = Math.max(8, window.innerWidth / 2 - 180);
-        const defY = Math.max(8, window.innerHeight - 100);
-        setPos(clampToViewport(defX, defY));
+        const defX = Math.max(12, window.innerWidth / 2 - 180);
+        const defY = Math.max(12, window.innerHeight - 100);
+        setPos(clampToViewport(defX, defY, widthGuess));
       }
     });
 
@@ -282,8 +324,9 @@ function Bar() {
         if (typeof next.showBar !== "undefined") setShowBar(next.showBar);
         if (typeof next.compact !== "undefined") setCompact(next.compact);
         if (typeof next.theme !== "undefined") setTheme(next.theme);
+        const { widthGuess } = layoutGuess(compact);
         if (next.barPos && typeof next.barPos.x === "number" && typeof next.barPos.y === "number") {
-          setPos(clampToViewport(next.barPos.x, next.barPos.y));
+          setPos(clampToViewport(next.barPos.x, next.barPos.y, widthGuess));
         }
       }
     };
@@ -294,13 +337,13 @@ function Bar() {
   // Listen for system theme changes when in auto mode
   useEffect(() => {
     if (theme !== "auto") return;
-    
+
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const handler = () => {
       // Force re-render by updating a dummy state or just let colors recalculate
       setTheme("auto");
     };
-    
+
     mediaQuery.addEventListener("change", handler);
     return () => mediaQuery.removeEventListener("change", handler);
   }, [theme]);
@@ -324,20 +367,35 @@ function Bar() {
 
   // Re-clamp position on viewport changes
   useEffect(() => {
-    const onResize = () => setPos((p) => (p ? clampToViewport(p.x, p.y) : p));
+    const onResize = () => {
+      const { widthGuess } = layoutGuess(compact);
+      setPos((p) => (p ? clampToViewport(p.x, p.y, widthGuess) : p));
+    };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+
+  // Re-clamp position when bar height changes (games added/removed)
+  useEffect(() => {
+    if (!pos || !barRef.current) return;
+    const { widthGuess } = layoutGuess(compact);
+    const clamped = clampToViewport(pos.x, pos.y, widthGuess);
+    // Only update if position actually changed to avoid infinite loops
+    if (clamped.x !== pos.x || clamped.y !== pos.y) {
+      setPos(clamped);
+    }
+  }, [games.length, compact]); // Re-run when these change bar height
 
   // Drag interactions
   useEffect(() => {
     if (!isDragging || !dragOffset) return;
 
     const handleMove = (clientX: number, clientY: number) => {
+      const { widthGuess } = layoutGuess(compact);
       const newX = clientX - dragOffset.x;
       const newY = clientY - dragOffset.y;
-      const clamped = clampToViewport(newX, newY);
-      const snapped = snapToEdges(clamped.x, clamped.y);
+      const clamped = clampToViewport(newX, newY, widthGuess);
+      const snapped = snapToEdges(clamped.x, clamped.y, widthGuess);
       setPos(snapped);
     };
 
@@ -407,12 +465,12 @@ function Bar() {
     height: 8,
     borderRadius: 9999,
     background: colors.dragHandle,
-    marginBottom: 8,
+    marginBottom: 16,
     cursor: isDragging ? "grabbing" : "grab",
     transition: isDragging ? "none" : "background-color 0.15s ease",
   };
 
-  const { widthGuess, left, right } = layoutGuess();
+  const { widthGuess, left, right } = layoutGuess(compact);
   const nearLeft = Math.abs(pos.x - left) < 0.5;
   const nearRight = Math.abs(pos.x - right) < 0.5;
   const isVertical = nearLeft || nearRight;
@@ -420,7 +478,7 @@ function Bar() {
   const columnWidth = widthGuess;
 
   return (
-    <div style={wrapperStyle}>
+    <div style={wrapperStyle} ref={barRef}>
       <div
         style={dragHandleStyle}
         onMouseDown={handleMouseDown}
@@ -439,7 +497,7 @@ function Bar() {
               display: "flex",
               flexDirection: "column",
               flexWrap: "nowrap",
-              gap: compact ? 8 : 10,
+              gap: compact ? 10 : 12,
               width: columnWidth,
               pointerEvents: "auto",
             }
@@ -447,7 +505,7 @@ function Bar() {
               display: "flex",
               flexDirection: "row",
               flexWrap: "wrap",
-              gap: compact ? 8 : 10,
+              gap: compact ? 10 : 12,
               pointerEvents: "auto",
             }
         }

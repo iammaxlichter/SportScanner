@@ -19,38 +19,50 @@ function useAsync<T>(fn: () => Promise<T>, deps: any[] = []) {
 
 function logoFor(league: League, teamId: string) {
   const abbr = teamId.toLowerCase();
-  // ESPN CDN paths are fairly consistent across major leagues:
   const baseByLeague: Record<League, string> = {
     nfl: "https://a.espncdn.com/i/teamlogos/nfl/500",
     nba: "https://a.espncdn.com/i/teamlogos/nba/500",
     mlb: "https://a.espncdn.com/i/teamlogos/mlb/500",
     nhl: "https://a.espncdn.com/i/teamlogos/nhl/500",
+    ncaaf: "https://a.espncdn.com/i/teamlogos/ncaa/500",
   };
-  const base = baseByLeague[league] || baseByLeague.nfl;
+  const base = baseByLeague[league];
   return `${base}/${abbr}.png`;
 }
 
+// ---- NEW: helpers & types for filters/sort ----
+type StatusFilter = "all" | "followed" | "unfollowed";
+type SortBy = "league" | "teamId" | "name";
+type SearchScope = "league" | "all";
+
+// small shared button style
+const chipBtn: React.CSSProperties = {
+  padding: '6px 10px',
+  borderRadius: 8,
+  border: '1px solid #e5e7eb',
+  background: '#fff',
+  cursor: 'pointer',
+};
 
 function Options() {
   const ALL_LEAGUES = Object.keys(LEAGUE_TEAMS) as League[];
-  const [league, setLeague] = useState<League>("nfl"); // default to NFL since that's live
+
+  const [league, setLeague] = useState<League>("nfl");
   const [search, setSearch] = useState("");
+
+  // NEW: more filters
+  const [searchScope, setSearchScope] = useState<SearchScope>("league");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [sortBy, setSortBy] = useState<SortBy>("league");
 
   // Local (unsaved) working copies
   const [settings, setLocalSettings] = useState<Settings>({
     pollingSeconds: 30,
     compact: true,
-    // removed showBar & theme from UI, but we keep them in storage shape
     showBar: true,
     theme: "auto",
   });
   const [selected, setSelected] = useState<FollowedTeam[]>([]);
-
-  // Collapsed per league (for large lists)
-  const [collapsed, setCollapsed] = useState<Record<League, boolean>>(
-    ALL_LEAGUES.reduce((acc, lg) => { acc[lg] = false; return acc; }, {} as Record<League, boolean>)
-  );
-  const toggleCollapsed = (lg: League) => setCollapsed(c => ({ ...c, [lg]: !c[lg] }));
 
   // Load initial data
   const init = useAsync(async () => {
@@ -61,66 +73,115 @@ function Options() {
     if (init.value) {
       setSelected(init.value.sel);
       setLocalSettings(init.value.s);
-      // auto-switch league to the first followed league if any
       if (init.value.sel[0]) setLeague(init.value.sel[0].league);
     }
   }, [init.value]);
 
-  // Derive lists
-  const available: FollowedTeam[] = useMemo(() => LEAGUE_TEAMS[league] ?? [], [league]);
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return available;
-    return available.filter(t =>
-      t.name.toLowerCase().includes(q) || t.teamId.toLowerCase().includes(q)
-    );
-  }, [available, search]);
+  // Build a flat list of all teams once
+  const ALL_TEAMS: FollowedTeam[] = useMemo(
+    () => (Object.values(LEAGUE_TEAMS) as FollowedTeam[][]).flat(),
+    []
+  );
 
   // Selection helpers
   const selectedKey = (t: FollowedTeam) => `${t.league}:${t.teamId}`;
   const selectedIds = useMemo(() => new Set(selected.map(selectedKey)), [selected]);
 
+  const TEAM_INDEX = useMemo(() => {
+    const m = new Map<string, FollowedTeam>();
+    ALL_TEAMS.forEach(t => m.set(`${t.league}:${t.teamId}`, t));
+    return m;
+  }, [ALL_TEAMS]);
+
+  const withLogo = (t: FollowedTeam): FollowedTeam => (
+    t.logo ? t : { ...t, logo: TEAM_INDEX.get(`${t.league}:${t.teamId}`)?.logo }
+  );
+
+  const removeTeam = (t: FollowedTeam) => {
+    const key = selectedKey(t);
+    setSelected(prev => prev.filter(x => selectedKey(x) !== key));
+  };
+
   const toggleTeam = (t: FollowedTeam) => {
     const key = selectedKey(t);
     const next = selectedIds.has(key)
       ? selected.filter(x => selectedKey(x) !== key)
-      : [...selected, t];
+      : [...selected, withLogo(t)];
     setSelected(next);
   };
-  const selectAllVisible = () => {
+
+  const selectAllVisible = (visibleList: FollowedTeam[]) => {
     const merge = new Map<string, FollowedTeam>();
-    for (const t of selected) merge.set(selectedKey(t), t);
-    for (const t of filtered) merge.set(selectedKey(t), t);
+    for (const t of selected) merge.set(selectedKey(t), withLogo(t));
+    for (const t of visibleList) merge.set(selectedKey(t), withLogo(t));
     setSelected(Array.from(merge.values()));
   };
-  const clearAllVisible = () => {
-    const vis = new Set(filtered.map(selectedKey));
+
+  const clearAllVisible = (visibleList: FollowedTeam[]) => {
+    const vis = new Set(visibleList.map(selectedKey));
     setSelected(selected.filter(t => !vis.has(selectedKey(t))));
   };
 
-  // NEW: baselines we compare against
+  // ---- Compute the base pool for the grid ----
+  const basePool: FollowedTeam[] = useMemo(() => {
+    if (searchScope === "all") return ALL_TEAMS;
+    return LEAGUE_TEAMS[league] ?? [];
+  }, [searchScope, league, ALL_TEAMS]);
+
+  // ---- Apply search ----
+  const filteredBySearch: FollowedTeam[] = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return basePool;
+    return basePool.filter(t =>
+      t.name.toLowerCase().includes(q) ||
+      t.teamId.toLowerCase().includes(q) ||
+      `${t.league}`.toLowerCase().includes(q)
+    );
+  }, [basePool, search]);
+
+  // ---- Apply status filter ----
+  const filteredByStatus: FollowedTeam[] = useMemo(() => {
+    if (statusFilter === "all") return filteredBySearch;
+    const wantFollowed = statusFilter === "followed";
+    return filteredBySearch.filter(t => selectedIds.has(selectedKey(t)) === wantFollowed);
+  }, [filteredBySearch, statusFilter, selectedIds]);
+
+  // ---- Sort ----
+  const sortedVisible: FollowedTeam[] = useMemo(() => {
+    const arr = [...filteredByStatus];
+    arr.sort((a, b) => {
+      if (sortBy === "league") {
+        if (a.league !== b.league) return a.league.localeCompare(b.league);
+        return a.name.localeCompare(b.name);
+      }
+      if (sortBy === "teamId") return a.teamId.localeCompare(b.teamId);
+      return a.name.localeCompare(b.name); // "name"
+    });
+    return arr;
+  }, [filteredByStatus, sortBy]);
+
+  // ---- Dirty tracking baselines ----
   const [baselineSel, setBaselineSel] = useState<FollowedTeam[]>([]);
   const [baselineSettings, setBaselineSettings] = useState<Settings>({
     pollingSeconds: 30, compact: true, showBar: true, theme: "auto",
   });
 
-  // when init loads, set baselines and working copies
   useEffect(() => {
     if (init.value) {
-      setSelected(init.value.sel);
+      const selWithLogos = init.value.sel.map(withLogo);
+      setSelected(selWithLogos);
       setLocalSettings(init.value.s);
-      setBaselineSel(init.value.sel);
+      setBaselineSel(selWithLogos);
       setBaselineSettings(init.value.s);
-      if (init.value.sel[0]) setLeague(init.value.sel[0].league);
+      if (selWithLogos[0]) setLeague(selWithLogos[0].league);
     }
-  }, [init.value]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [init.value, TEAM_INDEX]);
 
-  // compute dirty vs baselines (not init.value)
   const dirty =
     JSON.stringify(baselineSel) !== JSON.stringify(selected) ||
     JSON.stringify(baselineSettings) !== JSON.stringify(settings);
 
-  // on save, write to storage AND update baselines so dirty becomes false
   const saveAll = async () => {
     await setFollowedTeams(selected);
     await setSettings(settings);
@@ -134,11 +195,6 @@ function Options() {
       setTimeout(() => (btn.textContent = orig || "Update Bar"), 900);
     }
   };
-
-
-  // UI
-  const isCollapsed = collapsed[league];
-  const pollingMinutes = Math.max(1, Math.round(settings.pollingSeconds / 60));
 
   return (
     <div
@@ -203,96 +259,160 @@ function Options() {
             gap: 12,
           }}
         >
-          {/* League + search */}
+          {/* League + search + filters */}
           <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12 }}>
-            <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8 }}>
-              <label style={{ fontWeight: 600 }}>League</label>
-              <select
-                value={league}
-                onChange={e => { setLeague(e.target.value as League); setSearch(''); }}
-                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb' }}
-              >
-                {ALL_LEAGUES.map(lg => (
-                  <option key={lg} value={lg} disabled={!LEAGUE_TEAMS[lg]?.length}>
-                    {lg.toUpperCase()}
-                  </option>
-                ))}
-              </select>
-              <input
-                placeholder="Search by team name or ID (e.g. DAL)"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                style={{ flex: 1, padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb' }}
-              />
+            <div style={{ display: 'grid', gap: 10, marginBottom: 8 }}>
+              {/* Search scope */}
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                <label style={{ fontWeight: 600 }}>Search scope</label>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <input
+                    type="radio"
+                    name="scope"
+                    value="league"
+                    checked={searchScope === "league"}
+                    onChange={() => setSearchScope("league")}
+                  />
+                  Current league
+                </label>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <input
+                    type="radio"
+                    name="scope"
+                    value="all"
+                    checked={searchScope === "all"}
+                    onChange={() => setSearchScope("all")}
+                  />
+                  All leagues
+                </label>
+              </div>
+
+              {/* League (only matters when scope = league) */}
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                <label style={{ fontWeight: 600, opacity: searchScope === "all" ? 0.5 : 1 }}>League</label>
+                <select
+                  value={league}
+                  onChange={e => { setLeague(e.target.value as League); setSearch(''); }}
+                  style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb' }}
+                  disabled={searchScope === "all"}
+                >
+                  {ALL_LEAGUES.map(lg => (
+                    <option key={lg} value={lg} disabled={!LEAGUE_TEAMS[lg]?.length}>
+                      {lg.toUpperCase()}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Search input */}
+                <input
+                  placeholder={
+                    searchScope === "all"
+                      ? "Search all leagues by name/ID (e.g. DAL)"
+                      : "Search league by name/ID (e.g. DAL)"
+                  }
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  style={{ flex: 1, padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb' }}
+                />
+              </div>
+
+              {/* Extra filters */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: 10,
+                alignItems: 'center'
+              }}>
+                <label style={{ display: 'block' }}>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>Follow status</div>
+                  <select
+                    value={statusFilter}
+                    onChange={e => setStatusFilter(e.target.value as StatusFilter)}
+                    style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb', width: '100%' }}
+                  >
+                    <option value="all">All</option>
+                    <option value="followed">Followed</option>
+                    <option value="unfollowed">Unfollowed</option>
+                  </select>
+                </label>
+
+                <label style={{ display: 'block' }}>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>Sort by</div>
+                  <select
+                    value={sortBy}
+                    onChange={e => setSortBy(e.target.value as SortBy)}
+                    style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb', width: '100%' }}
+                  >
+                    <option value="league">League, then Name</option>
+                    <option value="teamId">Team ID</option>
+                    <option value="name">Team Name</option>
+                  </select>
+                </label>
+              </div>
             </div>
 
-            {/* Available teams (collapsible) */}
+            {/* Available teams */}
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <button
-                    aria-expanded={!isCollapsed}
-                    aria-controls="teams-panel"
-                    onClick={() => toggleCollapsed(league)}
-                    title={isCollapsed ? 'Expand' : 'Collapse'}
-                    style={{
-                      width: 28, height: 28, borderRadius: 6, border: '1px solid #e5e7eb',
-                      background: '#fff', cursor: 'pointer', lineHeight: '1', fontSize: 14
-                    }}
-                  >
-                    {isCollapsed ? '▶' : '▼'}
-                  </button>
-                  <h3 style={{ margin: 0 }}>Teams — {league.toUpperCase()}</h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <h3 style={{ margin: 0 }}>
+                    Teams — {searchScope === "all" ? "All Leagues" : league.toUpperCase()}
+                  </h3>
                   <span style={{ color: '#64748b', fontSize: 12 }}>
-                    {available.length} total{search ? ` · ${filtered.length} shown` : ''}
+                    {sortedVisible.length} shown
                   </span>
                 </div>
 
-                {!isCollapsed && (
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button onClick={selectAllVisible} style={chipBtn}>Select all (filtered)</button>
-                    <button onClick={clearAllVisible} style={chipBtn}>Clear filtered</button>
-                  </div>
-                )}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={() => selectAllVisible(sortedVisible)} style={chipBtn}>Select all (shown)</button>
+                  <button onClick={() => clearAllVisible(sortedVisible)} style={chipBtn}>Clear shown</button>
+                </div>
               </div>
 
-              {!isCollapsed ? (
-                <div id="teams-panel">
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 8 }}>
-                    {filtered.map(t => {
-                      const checked = selectedIds.has(selectedKey(t));
-                      return (
-                        <label
-                          key={selectedKey(t)}
-                          style={{
-                            display: "flex", alignItems: "center", gap: 10,
-                            padding: "8px 10px", border: "1px solid #e5e7eb", borderRadius: 10,
-                            background: checked ? "#f1f5f9" : "#fff", cursor: "pointer"
+              <div id="teams-panel">
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 8 }}>
+                  {sortedVisible.map(t => {
+                    const checked = selectedIds.has(selectedKey(t));
+                    return (
+                      <label
+                        key={selectedKey(t)}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 10,
+                          padding: "8px 10px", border: "1px solid #e5e7eb", borderRadius: 10,
+                          background: checked ? "#f1f5f9" : "#fff", cursor: "pointer"
+                        }}
+                      >
+                        <input type="checkbox" checked={checked} onChange={() => toggleTeam(t)} />
+                        <img
+                          src={t.logo ?? logoFor(t.league, t.teamId)}
+                          alt={t.name}
+                          referrerPolicy="no-referrer"
+                          onError={(e) => {
+                            const img = e.currentTarget as HTMLImageElement;
+                            if (img.dataset.fallback !== "1") {
+                              img.dataset.fallback = "1";
+                              img.src = logoFor(t.league, t.teamId);
+                            } else {
+                              img.style.display = "none";
+                            }
                           }}
-                        >
-                          <input type="checkbox" checked={checked} onChange={() => toggleTeam(t)} />
-                          <img
-                            src={logoFor(t.league, t.teamId)}
-                            alt={t.name}
-                            referrerPolicy="no-referrer"
-                            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
-                            style={{ width: 20, height: 20, borderRadius: 9999, objectFit: "cover", background: "#ffffffff" }}
-                          />
-                          <span style={{ fontWeight: 700, width: 42 }}>{t.teamId}</span>
-                          <span style={{ opacity: .9 }}>{t.name}</span>
-                        </label>
-                      );
-                    })}
-                    {!filtered.length && (
-                      <div style={{ color: '#64748b' }}>No teams match “{search}”.</div>
-                    )}
-                  </div>
+                          style={{ width: 16, height: 16, borderRadius: 9999, objectFit: "cover", background: "#fff" }}
+                        />
+                        <span style={{ fontWeight: 700, width: 42 }}>{t.teamId}</span>
+                        <span style={{ opacity: .9 }}>{t.name}</span>
+                        <span style={{ marginLeft: 'auto', color: '#64748b', fontSize: 12 }}>
+                          {t.league.toUpperCase()}
+                        </span>
+                      </label>
+                    );
+                  })}
+                  {!sortedVisible.length && (
+                    <div style={{ color: '#64748b' }}>
+                      No teams match your filters{search ? ` for “${search}”` : ""}.
+                    </div>
+                  )}
                 </div>
-              ) : (
-                <div style={{ color: '#64748b', fontSize: 13, padding: '4px 2px' }}>
-                  Section hidden — click ▶ to expand.
-                </div>
-              )}
+              </div>
             </div>
           </div>
 
@@ -306,7 +426,7 @@ function Options() {
               <input
                 type="number"
                 min={1}
-                value={pollingMinutes}
+                value={Math.max(1, Math.round(settings.pollingSeconds / 60))}
                 onChange={e => {
                   const mins = Math.max(1, Number(e.target.value) || 1);
                   setLocalSettings({ ...settings, pollingSeconds: mins * 60 });
@@ -344,7 +464,7 @@ function Options() {
                 Auto follows your OS appearance.
               </div>
             </label>
-            
+
             {/* Followed summary */}
             <div style={{ marginTop: 12 }}>
               <strong>Following ({selected.length}):</strong>
@@ -353,23 +473,65 @@ function Options() {
                   <span
                     key={selectedKey(t)}
                     style={{
-                      display: "inline-flex", alignItems: "center", gap: 6,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
                       border: "1px solid #e5e7eb",
                       borderRadius: 9999,
                       padding: "4px 10px",
-                      background: "#f8fafc"
+                      background: "#f8fafc",
+                      color: "#0f172a",
                     }}
                   >
                     <img
-                      src={logoFor(t.league, t.teamId)}
+                      src={t.logo ?? logoFor(t.league, t.teamId)}
                       alt={t.name}
                       referrerPolicy="no-referrer"
-                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
-                      style={{ width: 16, height: 16, borderRadius: 9999, objectFit: "cover", background: "#ffffffff" }}
+                      onError={(e) => {
+                        const img = e.currentTarget as HTMLImageElement;
+                        if (img.dataset.fallback !== "1") {
+                          img.dataset.fallback = "1";
+                          img.src = logoFor(t.league, t.teamId);
+                        } else {
+                          img.style.display = "none";
+                        }
+                      }}
+                      style={{ width: 16, height: 16, borderRadius: 9999, objectFit: "cover", background: "#fff" }}
                     />
                     {t.teamId}&nbsp;·&nbsp;{t.name}
+                    <button
+                      type="button"
+                      onClick={() => removeTeam(t)}
+                      aria-label={`Unfollow ${t.name}`}
+                      title="Remove"
+                      style={{
+                        marginLeft: 6,
+                        width: 18,
+                        height: 18,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderRadius: 9999,
+                        border: "1px solid #94a3b8",
+                        background: "#fff",
+                        color: "#334155",
+                        fontSize: 12,
+                        lineHeight: 1,
+                        padding: 0,
+                        cursor: "pointer",
+                        appearance: "none",
+                        WebkitAppearance: "none",
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          removeTeam(t);
+                        }
+                      }}
+                    >
+                      ×
+                    </button>
                   </span>
-
                 ))}
                 {!selected.length && <span style={{ color: '#64748b' }}>None yet</span>}
               </div>
@@ -379,7 +541,6 @@ function Options() {
             <div style={{ marginTop: 16 }}>
               <button
                 onClick={() => {
-                  // ensure bar is shown, then nuke saved position
                   setSettings({ ...settings, showBar: true }).then(() => {
                     chrome.storage.sync.get(['settings']).then(res => {
                       const next = { ...(res.settings ?? {}) };
@@ -400,14 +561,5 @@ function Options() {
     </div>
   );
 }
-
-// small shared button style
-const chipBtn: React.CSSProperties = {
-  padding: '6px 10px',
-  borderRadius: 8,
-  border: '1px solid #e5e7eb',
-  background: '#fff',
-  cursor: 'pointer',
-};
 
 createRoot(document.getElementById("root")!).render(<Options />);
