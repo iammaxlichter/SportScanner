@@ -35,6 +35,26 @@ type StatusFilter = "all" | "followed" | "unfollowed";
 type SortBy = "league" | "teamId" | "name";
 type SearchScope = "league" | "all";
 
+// ---- NEW: types for games + filter ----
+type GameFilter = "none" | "today" | "live";
+type Game = {
+  league: League;
+  homeId: string;          // canonical teamId (e.g., "DAL")
+  awayId: string;          // canonical teamId (e.g., "HOU")
+  startUtc: string;        // ISO UTC start
+  status: "scheduled" | "in_progress" | "final" | "postponed";
+};
+
+function isToday(dateIso: string) {
+  const d = new Date(dateIso);
+  const now = new Date();
+  return (
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  );
+}
+
 // small shared button style
 const chipBtn: React.CSSProperties = {
   padding: '6px 10px',
@@ -44,9 +64,82 @@ const chipBtn: React.CSSProperties = {
   cursor: 'pointer',
 };
 
+function InfoBadge({ text }: { text: string }) {
+  return (
+    <span
+      style={{
+        position: "absolute",
+        top: -6,            // overlap corner
+        right: -6,
+        width: 12,
+        height: 12,
+        borderRadius: "50%",
+        border: "1px solid #94a3b8",
+        background: "#f8fafc",
+        color: "#334155",
+        fontSize: 11,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 2,
+      }}
+      onMouseEnter={(e) => {
+        const tooltip = document.createElement("div");
+        tooltip.textContent = text;
+        Object.assign(tooltip.style, {
+          position: "absolute",
+          top: "100%",
+          right: 0,
+          transform: "translateY(6px)",
+          background: "#0f172a",
+          color: "#fff",
+          fontSize: "12px",
+          padding: "6px 8px",
+          borderRadius: "6px",
+          whiteSpace: "nowrap",
+          zIndex: "999",
+          pointerEvents: "none",
+          boxShadow: "0 6px 16px rgba(15,23,42,.2)",
+        });
+        tooltip.className = "tooltip";
+        e.currentTarget.appendChild(tooltip);
+      }}
+      onMouseLeave={(e) => {
+        const t = e.currentTarget.querySelector(".tooltip");
+        if (t) t.remove();
+      }}
+      aria-label={text}
+      title={text} // fallback for keyboard users
+      role="img"
+    >
+      i
+    </span>
+  );
+}
+
+type ButtonWithInfoProps = {
+  children: React.ReactNode;
+  onClick?: React.MouseEventHandler<HTMLButtonElement>;
+  tooltip: string;
+  style?: React.CSSProperties;
+  disabled?: boolean;
+};
+
+function ButtonWithInfo({ children, onClick, tooltip, style, disabled }: ButtonWithInfoProps) {
+  return (
+    <span style={{ position: "relative", display: "inline-block" }}>
+      <button onClick={onClick} style={{ ...chipBtn, ...style }} disabled={disabled}>
+        {children}
+      </button>
+      <InfoBadge text={tooltip} />
+    </span>
+  );
+}
+
 function Options() {
   const ALL_LEAGUES = Object.keys(LEAGUE_TEAMS) as League[];
 
+  const [resetBtnText, setResetBtnText] = useState("Reset bar position");
   const [league, setLeague] = useState<League>("nfl");
   const [search, setSearch] = useState("");
 
@@ -54,6 +147,34 @@ function Options() {
   const [searchScope, setSearchScope] = useState<SearchScope>("league");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [sortBy, setSortBy] = useState<SortBy>("league");
+
+  // ---- NEW: game filter + games from background ----
+  const [gameFilter, setGameFilter] = useState<GameFilter>("none");
+  const [games, setGames] = useState<Game[]>([]);
+
+  useEffect(() => {
+    const v = localStorage.getItem("ss_gameFilter");
+    if (v === "today" || v === "live" || v === "none") setGameFilter(v as GameFilter);
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("ss_gameFilter", gameFilter);
+  }, [gameFilter]);
+
+  const leaguesInScope: League[] = useMemo(
+    () => (searchScope === "all" ? (Object.keys(LEAGUE_TEAMS) as League[]) : [league]),
+    [searchScope, league]
+  );
+  useEffect(() => {
+    let cancelled = false;
+    chrome.runtime.sendMessage(
+      { type: "GET_GAMES_FOR_LEAGUES", leagues: leaguesInScope },
+      (resp?: { games?: Game[] }) => {
+        if (!cancelled && resp?.games) setGames(resp.games);
+      }
+    );
+    return () => { cancelled = true; };
+  }, [leaguesInScope]);
 
   // Local (unsaved) working copies
   const [settings, setLocalSettings] = useState<Settings>({
@@ -146,9 +267,39 @@ function Options() {
     return filteredBySearch.filter(t => selectedIds.has(selectedKey(t)) === wantFollowed);
   }, [filteredBySearch, statusFilter, selectedIds]);
 
-  // ---- Sort ----
+  // ---- NEW: sets for today/live teams from games ----
+  const teamsWithGameToday = useMemo(() => {
+    const s = new Set<string>();
+    for (const g of games) {
+      if (isToday(g.startUtc)) {
+        s.add(`${g.league}:${g.homeId}`);
+        s.add(`${g.league}:${g.awayId}`);
+      }
+    }
+    return s;
+  }, [games]);
+
+  const teamsLiveNow = useMemo(() => {
+    const s = new Set<string>();
+    for (const g of games) {
+      if (g.status === "in_progress") {
+        s.add(`${g.league}:${g.homeId}`);
+        s.add(`${g.league}:${g.awayId}`);
+      }
+    }
+    return s;
+  }, [games]);
+
+  // ---- NEW: Apply game filter after status filter ----
+  const filteredByGame: FollowedTeam[] = useMemo(() => {
+    if (gameFilter === "none") return filteredByStatus;
+    const allow = gameFilter === "live" ? teamsLiveNow : teamsWithGameToday; // "today"
+    return filteredByStatus.filter(t => allow.has(`${t.league}:${t.teamId}`));
+  }, [filteredByStatus, gameFilter, teamsLiveNow, teamsWithGameToday]);
+
+  // ---- Sort (now sorts filteredByGame) ----
   const sortedVisible: FollowedTeam[] = useMemo(() => {
-    const arr = [...filteredByStatus];
+    const arr = [...filteredByGame];
     arr.sort((a, b) => {
       if (sortBy === "league") {
         if (a.league !== b.league) return a.league.localeCompare(b.league);
@@ -158,7 +309,7 @@ function Options() {
       return a.name.localeCompare(b.name); // "name"
     });
     return arr;
-  }, [filteredByStatus, sortBy]);
+  }, [filteredByGame, sortBy]);
 
   // ---- Dirty tracking baselines ----
   const [baselineSel, setBaselineSel] = useState<FollowedTeam[]>([]);
@@ -196,6 +347,7 @@ function Options() {
     }
   };
 
+  
   return (
     <div
       style={{
@@ -234,18 +386,18 @@ function Options() {
             onClick={saveAll}
             disabled={!dirty}
             style={{
-              padding: '8px 14px',
+              padding: "8px 14px",
               borderRadius: 10,
-              border: '1px solid #0ea5e9',
-              background: dirty ? '#0ea5e9' : '#93c5fd',
-              color: '#fff',
-              cursor: dirty ? 'pointer' : 'not-allowed',
+              border: "1px solid #0ea5e9",
+              background: dirty ? "#0ea5e9" : "#93c5fd",
+              color: "#fff",
+              cursor: dirty ? "pointer" : "not-allowed",
               fontWeight: 600,
             }}
-            title={dirty ? 'Apply changes to the bar' : 'No changes to apply'}
           >
             Update Bar
           </button>
+
         </div>
       </div>
 
@@ -288,7 +440,7 @@ function Options() {
               </div>
 
               {/* League (only matters when scope = league) */}
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 20 }}>
                 <label style={{ fontWeight: 600, opacity: searchScope === "all" ? 0.5 : 1 }}>League</label>
                 <select
                   value={league}
@@ -321,7 +473,8 @@ function Options() {
                 display: 'grid',
                 gridTemplateColumns: '1fr 1fr',
                 gap: 10,
-                alignItems: 'center'
+                alignItems: 'center',
+                marginTop: 20
               }}>
                 <label style={{ display: 'block' }}>
                   <div style={{ fontWeight: 600, marginBottom: 4 }}>Follow status</div>
@@ -349,11 +502,53 @@ function Options() {
                   </select>
                 </label>
               </div>
+
+              {/* ---- NEW: GAME FILTER ROW ---- */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 20 }}>
+                <label style={{ display: 'block' }}>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>Game filter</div>
+                  <select
+                    value={gameFilter}
+                    onChange={e => setGameFilter(e.target.value as GameFilter)}
+                    style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb', width: '100%' }}
+                    title="Filter teams by whether they have a game today or are live now"
+                  >
+                    <option value="none">Show all teams</option>
+                    <option value="today">Only teams with a game today</option>
+                    <option value="live">Only teams in a live game</option>
+                  </select>
+                </label>
+
+                <div style={{ display: "flex", alignItems: "end", gap: 8 }}>
+                  <ButtonWithInfo
+                    onClick={() => setGameFilter("today")}
+                    tooltip="Show only teams with games scheduled today."
+                  >
+                    Today
+                  </ButtonWithInfo>
+
+                  <ButtonWithInfo
+                    onClick={() => setGameFilter("live")}
+                    tooltip="Show only teams currently in progress."
+                  >
+                    Live
+                  </ButtonWithInfo>
+
+                  <ButtonWithInfo
+                    onClick={() => setGameFilter("none")}
+                    tooltip="Clear all game filters."
+                  >
+                    Clear
+                  </ButtonWithInfo>
+                </div>
+
+              </div>
+              {/* ---- END GAME FILTER ROW ---- */}
             </div>
 
             {/* Available teams */}
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, marginTop: 30 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                   <h3 style={{ margin: 0 }}>
                     Teams — {searchScope === "all" ? "All Leagues" : league.toUpperCase()}
@@ -363,10 +558,23 @@ function Options() {
                   </span>
                 </div>
 
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button onClick={() => selectAllVisible(sortedVisible)} style={chipBtn}>Select all (shown)</button>
-                  <button onClick={() => clearAllVisible(sortedVisible)} style={chipBtn}>Clear shown</button>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <ButtonWithInfo
+                    onClick={() => selectAllVisible(sortedVisible)}
+                    tooltip="Follow all teams currently visible in this list."
+                  >
+                    Select all
+                  </ButtonWithInfo>
+
+                  <ButtonWithInfo
+                    onClick={() => clearAllVisible(sortedVisible)}
+                    tooltip="Unfollow all teams currently visible in this list."
+                  >
+                    Clear all selected
+                  </ButtonWithInfo>
                 </div>
+
+
               </div>
 
               <div id="teams-panel">
@@ -408,7 +616,11 @@ function Options() {
                   })}
                   {!sortedVisible.length && (
                     <div style={{ color: '#64748b' }}>
-                      No teams match your filters{search ? ` for “${search}”` : ""}.
+                      {gameFilter === "today"
+                        ? "No teams have a game today in this scope."
+                        : gameFilter === "live"
+                          ? "No teams are currently live in this scope."
+                          : `No teams match your filters${search ? ` for “${search}”` : ""}.`}
                     </div>
                   )}
                 </div>
@@ -421,7 +633,7 @@ function Options() {
             <h3 style={{ marginTop: 0 }}>Settings</h3>
 
             {/* Polling */}
-            <label style={{ display: 'block', marginBottom: 10 }}>
+            <label style={{ display: 'block', marginBottom: 10, marginTop: 20 }}>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>Refresh cadence (minutes)</div>
               <input
                 type="number"
@@ -433,13 +645,13 @@ function Options() {
                 }}
                 style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb', width: 140 }}
               />
-              <div style={{ color: '#64748b', fontSize: 12, marginTop: 4 }}>
+              <div style={{ color: '#64748b', fontSize: 10, marginTop: 4 }}>
                 Background updates run at least once per minute (Chrome limit).
               </div>
             </label>
 
             {/* Compact */}
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 20, marginBottom: 4 }}>
               <input
                 type="checkbox"
                 checked={settings.compact}
@@ -447,9 +659,12 @@ function Options() {
               />
               <span>Compact bar</span>
             </label>
+            <div style={{ color: '#64748b', fontSize: 10 }}>
+              Shrink the bar height and spacing for a tighter fit. (Doesn't display team names, only logos)
+            </div>
 
             {/* Theme */}
-            <label style={{ display: 'block', marginBottom: 12 }}>
+            <label style={{ display: 'block', marginBottom: 12, marginTop: 20 }}>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>Theme</div>
               <select
                 value={settings.theme ?? "auto"}
@@ -460,13 +675,13 @@ function Options() {
                 <option value="light">Light</option>
                 <option value="dark">Dark</option>
               </select>
-              <div style={{ color: '#64748b', fontSize: 12, marginTop: 4 }}>
+              <div style={{ color: '#64748b', fontSize: 10, marginTop: 4 }}>
                 Auto follows your OS appearance.
               </div>
             </label>
 
             {/* Followed summary */}
-            <div style={{ marginTop: 12 }}>
+            <div style={{ marginTop: 20 }}>
               <strong>Following ({selected.length}):</strong>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
                 {selected.map(t => (
@@ -540,20 +755,27 @@ function Options() {
             {/* Reset bar position */}
             <div style={{ marginTop: 16 }}>
               <button
-                onClick={() => {
-                  setSettings({ ...settings, showBar: true }).then(() => {
-                    chrome.storage.sync.get(['settings']).then(res => {
-                      const next = { ...(res.settings ?? {}) };
-                      delete (next as any).barPos;
-                      chrome.storage.sync.set({ settings: next });
-                    });
-                  });
+                onClick={async () => {
+                  const res = await chrome.storage.sync.get(["settings"]);
+                  const next = { ...(res.settings ?? {}) };
+                  delete (next as any).barPos;
+                  next.showBar = true;
+
+                  await chrome.storage.sync.set({ settings: next });
+                  setLocalSettings(prev => ({ ...prev, showBar: true }));
+
+                  chrome.runtime.sendMessage({ type: "SETTINGS_UPDATED", reason: "reset_bar_pos" });
+
+                  setResetBtnText("Reset ✓");
+                  setTimeout(() => setResetBtnText("Reset bar position"), 900);
+
                 }}
                 title="Reset bar position to default"
-                style={{ ...chipBtn, padding: '8px 12px' }}
+                style={{ ...chipBtn, padding: "8px 12px" }}
               >
-                Reset bar position
+                {resetBtnText}
               </button>
+
             </div>
           </div>
         </section>

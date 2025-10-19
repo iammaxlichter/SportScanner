@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { createRoot } from "react-dom/client";
 import type { Game } from "../lib/types";
 
@@ -252,12 +252,75 @@ function Bar() {
   const [showBar, setShowBar] = useState(true);
   const [compact, setCompact] = useState(true);
   const [theme, setTheme] = useState<Theme>("auto");
+  const [justRefreshed, setJustRefreshed] = useState(false);
+
+
+  function applySettingsFrom(obj: any) {
+    const next = obj ?? {};
+    if (typeof next.showBar !== "undefined") setShowBar(next.showBar);
+    if (typeof next.compact !== "undefined") setCompact(next.compact);
+    if (typeof next.theme !== "undefined") setTheme(next.theme);
+
+    const { widthGuess } = layoutGuess(next.compact ?? compact);
+    if (next.barPos && typeof next.barPos.x === "number" && typeof next.barPos.y === "number") {
+      setAnchor("free");
+      setPos(clampToViewport(next.barPos.x, next.barPos.y, widthGuess));
+    } else {
+      setAnchor("auto");
+      // schedule after layout to avoid 1-frame stale measurements
+      requestAnimationFrame(() => setPos(centerBottom()));
+    }
+  }
+
+  useEffect(() => {
+    const handler = (msg: any) => {
+      if (msg?.type === "GAMES_UPDATE") {
+        setGames((msg.games ?? []) as Game[]);
+      } else if (msg?.type === "REFRESH_BAR") {
+        // fetch latest settings and apply
+        chrome.storage.sync.get(["settings"]).then(({ settings }) => {
+          applySettingsFrom(settings);
+          // flash a quick visual confirmation
+          setJustRefreshed(true);
+          setTimeout(() => setJustRefreshed(false), 900);
+        });
+      }
+    };
+    chrome.runtime.onMessage.addListener(handler);
+    return () => chrome.runtime.onMessage.removeListener(handler);
+  }, []);
+
+  // ADD: anchor mode & helper
+  type Anchor = "auto" | "free";
+  const [anchor, setAnchor] = useState<Anchor>("auto");
+
+  const centerBottom = useCallback(() => {
+    const pad = 12;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const bw = barRef.current?.offsetWidth ?? layoutGuess(compact).widthGuess;
+    const bh = barRef.current?.offsetHeight ?? 80;
+    return clampToViewport(Math.round((vw - bw) / 2), vh - bh - pad, bw);
+  }, [compact]);
 
   // Drag state
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number } | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
+
+  // Re-center automatically when the bar's own size changes (wraps, rows/cols)
+  // so a single reset snaps to true bottom-center.
+  useEffect(() => {
+    if (anchor !== "auto" || !barRef.current) return;
+
+    const ro = new ResizeObserver(() => {
+      setPos(centerBottom());
+    });
+    ro.observe(barRef.current);
+
+    return () => ro.disconnect();
+  }, [anchor, centerBottom]);
 
   // Theme colors
   const colors = getThemeColors(theme);
@@ -294,12 +357,15 @@ function Bar() {
       if (t) window.clearTimeout(t);
       t = window.setTimeout(() => {
         chrome.storage.sync.get(["settings"]).then((res) => {
-          const settings = { ...(res.settings ?? {}), barPos: p };
+          const s = res.settings ?? {};
+          // only persist when in free mode
+          const settings = anchor === "free" ? { ...s, barPos: p } : { ...s, barPos: undefined };
           chrome.storage.sync.set({ settings }).catch(() => { });
         });
       }, 200);
     };
   })();
+
 
   // Load initial settings + position
   useEffect(() => {
@@ -308,25 +374,35 @@ function Bar() {
       setShowBar(s.showBar ?? true);
       setCompact(s.compact ?? true);
       setTheme(s.theme ?? "auto");
-      const { widthGuess } = layoutGuess(compact);
       if (s.barPos && typeof s.barPos.x === "number" && typeof s.barPos.y === "number") {
+        setAnchor("free");
+        const { widthGuess } = layoutGuess(s.compact ?? compact);
         setPos(clampToViewport(s.barPos.x, s.barPos.y, widthGuess));
       } else {
-        const defX = Math.max(12, window.innerWidth / 2 - 180);
-        const defY = Math.max(12, window.innerHeight - 100);
-        setPos(clampToViewport(defX, defY, widthGuess));
+        setAnchor("auto");
+        // schedule after layout to avoid 1-frame stale measurements
+        requestAnimationFrame(() => setPos(centerBottom()));
       }
     });
 
     const onChange = (changes: any, area: string) => {
       if (area === "sync" && changes.settings) {
+        setJustRefreshed(true);
+        setTimeout(() => setJustRefreshed(false), 900);
         const next = changes.settings.newValue ?? {};
         if (typeof next.showBar !== "undefined") setShowBar(next.showBar);
         if (typeof next.compact !== "undefined") setCompact(next.compact);
         if (typeof next.theme !== "undefined") setTheme(next.theme);
-        const { widthGuess } = layoutGuess(compact);
+        const { widthGuess } = layoutGuess(
+          typeof next.compact !== "undefined" ? next.compact : compact
+        );
         if (next.barPos && typeof next.barPos.x === "number" && typeof next.barPos.y === "number") {
+          setAnchor("free");
           setPos(clampToViewport(next.barPos.x, next.barPos.y, widthGuess));
+        } else {
+          setAnchor("auto");
+          // schedule after layout to avoid 1-frame stale measurements
+          requestAnimationFrame(() => setPos(centerBottom()));
         }
       }
     };
@@ -357,34 +433,35 @@ function Bar() {
       }
       if (resp?.games) setGames(resp.games as Game[]);
     });
-
-    const handler = (msg: any) => {
-      if (msg?.type === "GAMES_UPDATE") setGames((msg.games ?? []) as Game[]);
-    };
-    chrome.runtime.onMessage.addListener(handler);
-    return () => chrome.runtime.onMessage.removeListener(handler);
   }, []);
 
   // Re-clamp position on viewport changes
   useEffect(() => {
     const onResize = () => {
-      const { widthGuess } = layoutGuess(compact);
-      setPos((p) => (p ? clampToViewport(p.x, p.y, widthGuess) : p));
+      if (anchor === "auto") {
+        setPos(centerBottom());
+      } else {
+        const { widthGuess } = layoutGuess(compact);
+        setPos((p) => (p ? clampToViewport(p.x, p.y, widthGuess) : p));
+      }
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
-  }, []);
+    }, [anchor, compact, centerBottom]);
 
-  // Re-clamp position when bar height changes (games added/removed)
   useEffect(() => {
-    if (!pos || !barRef.current) return;
+    if (anchor !== "auto") return;
+    setPos(centerBottom());
+  }, [games.length, compact, theme, centerBottom]);
+
+  useEffect(() => {
+    if (anchor !== "free" || !pos || !barRef.current) return;
     const { widthGuess } = layoutGuess(compact);
     const clamped = clampToViewport(pos.x, pos.y, widthGuess);
-    // Only update if position actually changed to avoid infinite loops
     if (clamped.x !== pos.x || clamped.y !== pos.y) {
       setPos(clamped);
     }
-  }, [games.length, compact]); // Re-run when these change bar height
+  }, [games.length, compact, anchor]);
 
   // Drag interactions
   useEffect(() => {
@@ -392,11 +469,10 @@ function Bar() {
 
     const handleMove = (clientX: number, clientY: number) => {
       const { widthGuess } = layoutGuess(compact);
-      const newX = clientX - dragOffset.x;
-      const newY = clientY - dragOffset.y;
+      const newX = clientX - dragOffset!.x;
+      const newY = clientY - dragOffset!.y;
       const clamped = clampToViewport(newX, newY, widthGuess);
-      const snapped = snapToEdges(clamped.x, clamped.y, widthGuess);
-      setPos(snapped);
+      setPos(anchor === "free" ? snapToEdges(clamped.x, clamped.y, widthGuess) : clamped);
     };
 
     const handleMouseMove = (e: MouseEvent) => {
@@ -427,12 +503,13 @@ function Bar() {
       document.removeEventListener("touchend", handleEnd);
       document.removeEventListener("touchcancel", handleEnd);
     };
-  }, [isDragging, dragOffset, pos]);
+  }, [isDragging, dragOffset, pos, anchor]);
 
   if (!showBar || !pos || games.length === 0) return null;
 
   const handleDragStart = (clientX: number, clientY: number) => {
-    setDragOffset({ x: clientX - pos.x, y: clientY - pos.y });
+    setAnchor("free");
+    setDragOffset({ x: clientX - (pos?.x ?? 0), y: clientY - (pos?.y ?? 0) });
     setIsDragging(true);
   };
   const handleMouseDown: React.MouseEventHandler<HTMLDivElement> = (e) => {
@@ -464,10 +541,11 @@ function Bar() {
     width: 60,
     height: 8,
     borderRadius: 9999,
-    background: colors.dragHandle,
+    background: justRefreshed ? "#22c55e" : colors.dragHandle, // flash green
+    boxShadow: justRefreshed ? "0 0 0 6px rgba(34,197,94,.25)" : "none",
     marginBottom: 16,
     cursor: isDragging ? "grabbing" : "grab",
-    transition: isDragging ? "none" : "background-color 0.15s ease",
+    transition: "background-color 160ms ease, box-shadow 160ms ease",
   };
 
   const { widthGuess, left, right } = layoutGuess(compact);

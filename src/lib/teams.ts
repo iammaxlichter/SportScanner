@@ -68,7 +68,7 @@ export const NFL_TEAMS: FollowedTeam[] = [
   { league: "nfl", teamId: "SEA", name: "Seattle Seahawks" },
   { league: "nfl", teamId: "TB",  name: "Tampa Bay Buccaneers" },
   { league: "nfl", teamId: "TEN", name: "Tennessee Titans" },
-  { league: "nfl", teamId: "WAS", name: "Washington Commanders" },
+  { league: "nfl", teamId: "WSH", name: "Washington Commanders" },
 ];
 
 /** MLB (30) */

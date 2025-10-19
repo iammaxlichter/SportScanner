@@ -86,17 +86,76 @@ chrome.runtime.onStartup?.addListener(async () => {
 });
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  // 1) Return the raw snapshot you already expose
   if (msg?.type === "GET_SNAPSHOT") {
     sendResponse({ games: lastGames });
     return; // no async
   }
+
+  // 2) NEW: Return simplified games for the Options "game filter"
+  // msg: { type: "GET_GAMES_FOR_LEAGUES", leagues: League[] }
+  if (msg?.type === "GET_GAMES_FOR_LEAGUES") {
+    const leagues: League[] = Array.isArray(msg.leagues) ? msg.leagues : [];
+
+    // Helper: phase -> simplified status
+    const phaseToStatus = (phase: string): "scheduled" | "in_progress" | "final" | "postponed" => {
+      const p = (phase || "").toLowerCase();
+      if (p === "live" || p === "in_progress") return "in_progress";
+      if (p === "final") return "final";
+      if (p === "postponed") return "postponed";
+      return "scheduled";
+    };
+
+    (async () => {
+      try {
+        // NEW: fetch league-wide "today" for requested leagues,
+        // instead of using lastGames (which only has *followed* teams).
+        const todayAll = leagues.length ? await fetchTodayForLeagues(leagues) : [];
+
+        // Fallback: if fetch failed/empty, at least surface what we have cached
+        const pool = todayAll.length ? todayAll : lastGames.filter(g =>
+          !leagues.length || leagues.includes(g.league as League)
+        );
+
+        const mapped = pool.map(g => {
+          const lg = g.league as League;
+          return {
+            league: lg,
+            homeId: canonId(lg, g.home.teamId),
+            awayId: canonId(lg, g.away.teamId),
+            startUtc: new Date(g.startTime).toISOString(),
+            status: phaseToStatus(g.status?.phase),
+          };
+        });
+
+        sendResponse({ games: mapped });
+      } catch (e) {
+        console.warn("[SportScanner] GET_GAMES_FOR_LEAGUES error:", e);
+        sendResponse({ games: [] });
+      }
+    })();
+
+    return true; // keep port open for async sendResponse
+  }
+
+
   if (msg?.type === "SETTINGS_UPDATED") {
     (async () => {
       await schedule();
       await pollOnce();
       sendResponse?.({ ok: true });
     })();
-    return true; // keep port open for async sendResponse
+    return true;
+  }
+});
+
+chrome.runtime.onMessage.addListener((msg, _sender, _sendResponse) => {
+  if (msg?.type === "SETTINGS_UPDATED") {
+    chrome.tabs.query({}, (tabs) => {
+      for (const t of tabs) {
+        if (t.id) chrome.tabs.sendMessage(t.id, { type: "REFRESH_BAR", reason: msg.reason });
+      }
+    });
   }
 });
 
@@ -293,4 +352,41 @@ async function fetchLiveGamesForFollowed(): Promise<Game[]> {
   );
 
   return result;
+}
+
+async function fetchTodayForLeagues(leagues: League[]): Promise<Game[]> {
+  const all: Game[] = [];
+
+  for (const league of leagues) {
+    try {
+      const url = new URL(PROXY_URL);
+      url.searchParams.set("league", league.toLowerCase());
+      url.searchParams.set("mode", "today");
+      // IMPORTANT: no 'team' params here -> proxy should return all of today's games for the league
+
+      const res = await fetch(url.toString());
+      if (!res.ok) {
+        console.warn(`[SportScanner] Proxy ${league} today(all) non-OK: ${res.status}`);
+        continue;
+      }
+      const data = (await res.json()) as { games: Game[] };
+      if (!data?.games?.length) continue;
+
+      // Normalize to canonical IDs for consistency with LEAGUE_TEAMS
+      for (const g of data.games) {
+        const lg = league as League;
+        // mutate copies so we don't change cached objects elsewhere
+        const home = { ...g.home, teamId: canonId(lg, g.home.teamId) };
+        const away = { ...g.away, teamId: canonId(lg, g.away.teamId) };
+        all.push({ ...g, league: lg, home, away });
+      }
+    } catch (err) {
+      console.warn(`[SportScanner] Proxy ${league} today(all) error:`, err);
+    }
+  }
+
+  // Dedupe by your normalized key, then return
+  const uniq = new Map<string, Game>();
+  for (const g of all) uniq.set(gameKey(g), g);
+  return Array.from(uniq.values());
 }

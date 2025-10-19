@@ -20,6 +20,9 @@
     "host_permissions": [
         "https://sportscanner-proxy.semiultra.workers.dev/*"
     ],
+    "content_security_policy": {
+        "extension_pages": "script-src 'self'; object-src 'self'; img-src 'self' data: https://a.espncdn.com;"
+    },
     "content_scripts": [
         {
             "matches": [
