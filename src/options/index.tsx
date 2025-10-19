@@ -379,7 +379,7 @@ function Options() {
         >
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
             <img
-              src="src/icons/icon48.png"
+              src="../assets/icons/icon48.png"
               alt="SportScanner logo"
               style={{
                 width: 32,
