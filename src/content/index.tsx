@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import type { Game } from "../lib/types";
 
@@ -103,11 +103,108 @@ function getThemeColors(theme: Theme): ThemeColors {
   }
 }
 
+function ordinal(n?: number) {
+  if (!n || n < 1) return "";
+  const s = ["th", "st", "nd", "rd"], v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+type NFLSituation = {
+  hasBallSide: "home" | "away" | null;
+  down?: number;
+  distance?: number;
+  spot?: string;
+};
+
+type MLBSituation = {
+  outs?: number;
+  onFirst?: boolean;
+  onSecond?: boolean;
+  onThird?: boolean;
+};
+
+function getNflSituation(g: Game): NFLSituation {
+  const s: any = g.status || {};
+
+  // Possession comes directly from status now
+  let hasBallSide: "home" | "away" | null = null;
+  if (s.possession === "home" || s.possession === "away") {
+    hasBallSide = s.possession;
+  }
+
+  // Down, distance, and yard line also come from status
+  const down = typeof s.down === "number" ? s.down : undefined;
+  const distance = typeof s.distance === "number" ? s.distance : undefined;
+  const spot = typeof s.yardLine === "string" ? s.yardLine : undefined;
+
+  return {
+    hasBallSide,
+    down,
+    distance,
+    spot,
+  };
+}
+
+function getMlbSituation(g: Game): MLBSituation {
+  const s: any = g.status || {};
+
+  return {
+    outs: typeof s.outs === "number" ? s.outs : undefined,
+    onFirst: s.onFirst === true,
+    onSecond: s.onSecond === true,
+    onThird: s.onThird === true,
+  };
+}
+
 function Card({ g, compact, colors }: { g: Game; compact: boolean; colors: ThemeColors }) {
-  const Side = ({ s }: { s: Game["home"]; side: "home" | "away" }) => {
+  const isNFL = (g.league || "").toLowerCase() === "nfl";
+  const isNCAAF = (g.league || "").toLowerCase() === "ncaaf"
+  const isMLB = (g.league || "").toLowerCase() === "mlb";
+  const isGridiron = isNFL || isNCAAF;
+
+  const mlb = isMLB ? getMlbSituation(g) : ({} as MLBSituation);
+  const gridiron = isGridiron ? getNflSituation(g) : ({} as NFLSituation);
+
+  if (isNFL && g.status?.phase === "live") {
+    console.log("[SS NFL]", {
+      teams: { home: g.home.teamId, away: g.away.teamId },
+      rawStatus: g.status,
+      extracted: gridiron,
+    });
+  }
+
+  if (isMLB && g.status?.phase === "live") {
+    console.log("[SS MLB]", {
+      teams: { home: g.home.teamId, away: g.away.teamId },
+      rawStatus: g.status,
+      extracted: mlb,
+    });
+  }
+
+  const Side = (props: {
+    s: Game["home"];
+    side: "home" | "away"; // kept for caller consistency
+    hasBall?: boolean;
+  }) => {
+    const { s, hasBall } = props;
     const [imgOk, setImgOk] = useState(true);
     const abbr = s.teamId?.toUpperCase?.() || abbrevFromName(s.name);
     const logoUrl = s.logo;
+
+    const Dot = () => (
+      <span
+        title="Possession"
+        style={{
+          position: "absolute",
+          top: -3,
+          right: -3,
+          width: 8,
+          height: 8,
+          borderRadius: 9999,
+          background: "#ef4444",
+          boxShadow: "0 0 0 2px " + colors.cardBg,
+        }}
+      />
+    );
 
     const CircleAbbr = ({ size }: { size: number }) => (
       <div
@@ -122,24 +219,36 @@ function Card({ g, compact, colors }: { g: Game; compact: boolean; colors: Theme
           fontWeight: 700,
           letterSpacing: 0.3,
           color: colors.abbrevText,
+          position: "relative",
         }}
       >
         {abbr}
+        {hasBall && <Dot />}
       </div>
     );
 
-    const LogoOrAbbr = ({ size }: { size: number }) =>
-      logoUrl && imgOk ? (
-        <img
-          src={logoUrl}
-          alt={s.name}
-          referrerPolicy="no-referrer"
-          onError={() => setImgOk(false)}
-          style={{ width: size, height: size, borderRadius: 9999, objectFit: "cover", background: colors.logoBg }}
-        />
-      ) : (
-        <CircleAbbr size={size} />
-      );
+    const LogoOrAbbr = ({ size }: { size: number }) => (
+      <div style={{ position: "relative", width: size, height: size }}>
+        {logoUrl && imgOk ? (
+          <img
+            src={logoUrl}
+            alt={s.name}
+            referrerPolicy="no-referrer"
+            onError={() => setImgOk(false)}
+            style={{
+              width: size,
+              height: size,
+              borderRadius: 9999,
+              objectFit: "cover",
+              background: colors.logoBg,
+            }}
+          />
+        ) : (
+          <CircleAbbr size={size} />
+        )}
+        {hasBall && <Dot />}
+      </div>
+    );
 
     if (compact) {
       return (
@@ -174,15 +283,9 @@ function Card({ g, compact, colors }: { g: Game; compact: boolean; colors: Theme
             lineHeight: 1.1,
           }}
         >
-          <strong
-            style={{
-              fontSize: 12,
-              color: colors.textPrimary,
-              textAlign: "center",
-            }}
-          >
+          <label style={{ fontSize: 12, color: colors.textPrimary, textAlign: "center" }}>
             {s.name}
-          </strong>
+          </label>
           <span
             style={{
               fontSize: 11,
@@ -198,6 +301,8 @@ function Card({ g, compact, colors }: { g: Game; compact: boolean; colors: Theme
       </div>
     );
   };
+
+
 
   const formatShort = (ts: number) => {
     try {
@@ -226,10 +331,10 @@ function Card({ g, compact, colors }: { g: Game; compact: boolean; colors: Theme
       }}
     >
       <div style={{ justifySelf: "start" }}>
-        <Side s={g.away} side="away" />
+        <Side s={g.away} side="away" hasBall={gridiron.hasBallSide === "away"} />
       </div>
 
-      <div style={{ textAlign: "center", fontSize: compact ? 11 : 12 }}>
+      <div style={{ textAlign: "center", fontSize: compact ? 11 : 12, lineHeight: 1.15 }}>
         {!compact && <div style={{ fontWeight: 700, letterSpacing: 0.3 }}>{g.league.toUpperCase()}</div>}
         <div style={{ opacity: 0.9 }}>
           {g.status.phase === "live"
@@ -238,10 +343,50 @@ function Card({ g, compact, colors }: { g: Game; compact: boolean; colors: Theme
               ? formatShort(g.startTime)
               : "FINAL"}
         </div>
+
+        {/* MLB-only: show outs and runners if live */}
+        {isMLB && g.status?.phase === "live" && (
+          (() => {
+            const { outs, onFirst, onSecond, onThird } = mlb;
+            const runners = [onFirst && "1st", onSecond && "2nd", onThird && "3rd"]
+              .filter(Boolean)
+              .join(", ");
+
+            const outsText = typeof outs === "number" ? `${outs} out${outs !== 1 ? "s" : ""}` : "";
+            const runnersText = runners ? `Runners: ${runners}` : "";
+
+            const text = [outsText, runnersText].filter(Boolean).join(" • ");
+
+            return text ? (
+              <div style={{ marginTop: 2, color: colors.textSecondary, fontSize: compact ? 10 : 11 }}>
+                {text}
+              </div>
+            ) : null;
+          })()
+        )}
+
+        {/* NFL-only: show down & distance if live and present */}
+        {isGridiron && g.status?.phase === "live" && (
+          (() => {
+            const { down, distance: togo, spot } = gridiron;
+            const text =
+              down && togo
+                ? `${ordinal(down)} & ${togo}${spot ? ` @ ${spot}` : ""}`
+                : spot
+                  ? `@ ${spot}`
+                  : "";
+            return text ? (
+              <div style={{ marginTop: 2, color: colors.textSecondary, fontSize: compact ? 10 : 11 }}>
+                {text}
+              </div>
+            ) : null;
+          })()
+        )}
       </div>
 
+
       <div style={{ justifySelf: "end" }}>
-        <Side s={g.home} side="home" />
+        <Side s={g.home} side="home" hasBall={gridiron.hasBallSide === "home"} />
       </div>
     </div>
   );
@@ -254,6 +399,58 @@ function Bar() {
   const [theme, setTheme] = useState<Theme>("auto");
   const [justRefreshed, setJustRefreshed] = useState(false);
 
+  const showBarRef = useRef(showBar);
+  useEffect(() => { showBarRef.current = showBar; }, [showBar]);
+
+  // put inside Bar()
+  const displayGames = useMemo(() => {
+    // priority: live (0) < pre (1) < final (2)
+    const rank = (g: Game) =>
+      g.status?.phase === "live" ? 0 :
+        g.status?.phase === "pre" ? 1 : 2;
+
+    // optional window for upcoming games (e.g., next 48h)
+    const now = Date.now();
+    const soonMs = 48 * 60 * 60 * 1000;
+
+    const pool = games.filter(g =>
+      g.status?.phase !== "pre" ||
+      (typeof g.startTime === "number" &&
+        g.startTime - now <= soonMs &&
+        g.startTime - now >= -soonMs)
+    );
+
+    const sorted = [...pool].sort((a, b) => {
+      const ra = rank(a), rb = rank(b);
+      if (ra !== rb) return ra - rb;
+
+      // among PRE games, earlier start wins
+      if (a.status?.phase === "pre" && b.status?.phase === "pre") {
+        return (a.startTime ?? 0) - (b.startTime ?? 0);
+      }
+
+      // among FINAL-ish (neither live nor pre), most recent first
+      const aFinalish = a.status?.phase !== "live" && a.status?.phase !== "pre";
+      const bFinalish = b.status?.phase !== "live" && b.status?.phase !== "pre";
+      if (aFinalish && bFinalish) {
+        return (b.startTime ?? 0) - (a.startTime ?? 0);
+      }
+
+      return 0;
+    });
+
+    // take at most one game per team
+    const taken = new Set<string>();
+    const out: Game[] = [];
+    for (const g of sorted) {
+      const teams = [g.home.teamId, g.away.teamId].filter(Boolean) as string[];
+      if (teams.some(t => taken.has(t))) continue;
+      out.push(g);
+      teams.forEach(t => taken.add(t));
+    }
+    return out;
+  }, [games]);
+
 
   function applySettingsFrom(obj: any) {
     const next = obj ?? {};
@@ -261,28 +458,34 @@ function Bar() {
     if (typeof next.compact !== "undefined") setCompact(next.compact);
     if (typeof next.theme !== "undefined") setTheme(next.theme);
 
+    const nextShowBar =
+      typeof next.showBar !== "undefined" ? next.showBar : showBarRef.current;
+
+    if (!nextShowBar) return;
+
     const { widthGuess } = layoutGuess(next.compact ?? compact);
     if (next.barPos && typeof next.barPos.x === "number" && typeof next.barPos.y === "number") {
       setAnchor("free");
       setPos(clampToViewport(next.barPos.x, next.barPos.y, widthGuess));
     } else {
       setAnchor("auto");
-      // schedule after layout to avoid 1-frame stale measurements
       requestAnimationFrame(() => setPos(centerBottom()));
     }
   }
+
 
   useEffect(() => {
     const handler = (msg: any) => {
       if (msg?.type === "GAMES_UPDATE") {
         setGames((msg.games ?? []) as Game[]);
       } else if (msg?.type === "REFRESH_BAR") {
-        // fetch latest settings and apply
         chrome.storage.sync.get(["settings"]).then(({ settings }) => {
           applySettingsFrom(settings);
-          // flash a quick visual confirmation
-          setJustRefreshed(true);
-          setTimeout(() => setJustRefreshed(false), 900);
+          const sb = typeof settings?.showBar !== "undefined" ? settings.showBar : showBarRef.current;
+          if (sb) {
+            setJustRefreshed(true);
+            setTimeout(() => setJustRefreshed(false), 900);
+          }
         });
       }
     };
@@ -374,41 +577,58 @@ function Bar() {
       setShowBar(s.showBar ?? true);
       setCompact(s.compact ?? true);
       setTheme(s.theme ?? "auto");
-      if (s.barPos && typeof s.barPos.x === "number" && typeof s.barPos.y === "number") {
-        setAnchor("free");
-        const { widthGuess } = layoutGuess(s.compact ?? compact);
-        setPos(clampToViewport(s.barPos.x, s.barPos.y, widthGuess));
+
+      const { widthGuess } = layoutGuess(s.compact ?? compact);
+
+      // ✅ Only compute position if bar is ON
+      if (s.showBar ?? true) {
+        if (s.barPos && typeof s.barPos.x === "number" && typeof s.barPos.y === "number") {
+          setAnchor("free");
+          setPos(clampToViewport(s.barPos.x, s.barPos.y, widthGuess));
+        } else {
+          setAnchor("auto");
+          requestAnimationFrame(() => setPos(centerBottom()));
+        }
       } else {
+        // If bar is OFF, keep hidden
         setAnchor("auto");
-        // schedule after layout to avoid 1-frame stale measurements
-        requestAnimationFrame(() => setPos(centerBottom()));
+        setPos(null);
       }
     });
 
     const onChange = (changes: any, area: string) => {
-      if (area === "sync" && changes.settings) {
-        setJustRefreshed(true);
-        setTimeout(() => setJustRefreshed(false), 900);
-        const next = changes.settings.newValue ?? {};
-        if (typeof next.showBar !== "undefined") setShowBar(next.showBar);
-        if (typeof next.compact !== "undefined") setCompact(next.compact);
-        if (typeof next.theme !== "undefined") setTheme(next.theme);
-        const { widthGuess } = layoutGuess(
-          typeof next.compact !== "undefined" ? next.compact : compact
-        );
-        if (next.barPos && typeof next.barPos.x === "number" && typeof next.barPos.y === "number") {
-          setAnchor("free");
-          setPos(clampToViewport(next.barPos.x, next.barPos.y, widthGuess));
-        } else {
-          setAnchor("auto");
-          // schedule after layout to avoid 1-frame stale measurements
-          requestAnimationFrame(() => setPos(centerBottom()));
-        }
+      if (area !== "sync" || !changes.settings) return;
+
+      const next = changes.settings.newValue ?? {};
+      if (typeof next.showBar !== "undefined") setShowBar(next.showBar);
+      if (typeof next.compact !== "undefined") setCompact(next.compact);
+      if (typeof next.theme !== "undefined") setTheme(next.theme);
+
+      const { widthGuess } = layoutGuess(next.compact ?? compact);
+      const nextShowBar =
+        typeof next.showBar !== "undefined" ? next.showBar : showBarRef.current;
+
+      if (!nextShowBar) {
+        setPos(null);
+        return;
       }
+
+      if (next.barPos && typeof next.barPos.x === "number" && typeof next.barPos.y === "number") {
+        setAnchor("free");
+        setPos(clampToViewport(next.barPos.x, next.barPos.y, widthGuess));
+      } else {
+        setAnchor("auto");
+        requestAnimationFrame(() => setPos(centerBottom()));
+      }
+
+      setJustRefreshed(true);
+      setTimeout(() => setJustRefreshed(false), 900);
     };
+
     chrome.storage.onChanged.addListener(onChange);
     return () => chrome.storage.onChanged.removeListener(onChange);
   }, []);
+
 
   // Listen for system theme changes when in auto mode
   useEffect(() => {
@@ -447,7 +667,7 @@ function Bar() {
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
-    }, [anchor, compact, centerBottom]);
+  }, [anchor, compact, centerBottom]);
 
   useEffect(() => {
     if (anchor !== "auto") return;
@@ -463,6 +683,12 @@ function Bar() {
     }
   }, [games.length, compact, anchor]);
 
+  useEffect(() => {
+    // if the bar is hidden or has no cards, clear the badge
+    const count = showBar && pos && displayGames.length ? String(displayGames.length) : "";
+    chrome.runtime.sendMessage({ type: "BADGE_COUNT", count }).catch(() => { });
+  }, [displayGames.length, showBar, !!pos]);
+  
   // Drag interactions
   useEffect(() => {
     if (!isDragging || !dragOffset) return;
@@ -588,7 +814,7 @@ function Bar() {
             }
         }
       >
-        {games.map((game, i) => (
+        {displayGames.map((game, i) => (
           <div
             key={`${game.league}-${game.home.teamId}-${game.away.teamId}-${game.startTime}-${i}`}
             style={isVertical ? { width: "100%" } : undefined}
@@ -596,6 +822,7 @@ function Bar() {
             <Card g={game} compact={compact} colors={colors} />
           </div>
         ))}
+
       </div>
     </div>
   );

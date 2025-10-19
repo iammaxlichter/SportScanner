@@ -20,6 +20,17 @@ export type Game = {
   league: League;
   home: TeamSide;
   away: TeamSide;
-  status: { phase: "pre" | "live" | "final"; clock?: string };
-  startTime: number; // epoch ms
+  status: { 
+    phase: "pre" | "live" | "final"; 
+    clock?: string;
+    possession?: string;
+    down?: number;
+    distance?: number;
+    yardLine?: string;
+    outs?: number;
+    onFirst?: boolean;
+    onSecond?: boolean;
+    onThird?: boolean;
+  };
+  startTime: number;
 };

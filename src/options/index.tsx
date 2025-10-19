@@ -347,7 +347,7 @@ function Options() {
     }
   };
 
-  
+
   return (
     <div
       style={{
@@ -378,6 +378,15 @@ function Options() {
           }}
         >
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+            <img
+              src="src/icons/icon48.png"
+              alt="SportScanner logo"
+              style={{
+                width: 32,
+                height: 32,
+                objectFit: 'contain',
+              }}
+            />
             <h1 style={{ margin: 0, fontSize: 18 }}>SportScanner — Options</h1>
             {dirty && <span style={{ fontSize: 12, color: '#0ea5e9' }}>Unsaved changes</span>}
           </div>
@@ -682,7 +691,38 @@ function Options() {
 
             {/* Followed summary */}
             <div style={{ marginTop: 20 }}>
-              <strong>Following ({selected.length}):</strong>
+              <div style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8
+              }}>
+                <strong>Following ({selected.length}):</strong>
+
+                <button
+                  type="button"
+                  disabled={!selected.length}
+                  onClick={() => {
+                    if (selected.length === 0) return;
+                    if (confirm(`Remove all ${selected.length} followed team(s)?`)) {
+                      setSelected([]); // (persist after with "Update Bar")
+                    }
+                  }}
+                  title="Remove all followed teams"
+                  style={{
+                    padding: "4px 10px",
+                    borderRadius: 9999,
+                    border: "1px solid #e5e7eb",
+                    background: "#fff",
+                    color: "#0f172a",
+                    fontSize: 12,
+                    cursor: selected.length ? "pointer" : "not-allowed",
+                  }}
+                >
+                  Clear all
+                </button>
+              </div>
+
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
                 {selected.map(t => (
                   <span
@@ -744,7 +784,7 @@ function Options() {
                         }
                       }}
                     >
-                      ×
+                      x
                     </button>
                   </span>
                 ))}
@@ -757,14 +797,13 @@ function Options() {
               <button
                 onClick={async () => {
                   const res = await chrome.storage.sync.get(["settings"]);
-                  const next = { ...(res.settings ?? {}) };
+                  const prev = res.settings ?? {};
+                  const next = { ...prev };
                   delete (next as any).barPos;
-                  next.showBar = true;
 
                   await chrome.storage.sync.set({ settings: next });
-                  setLocalSettings(prev => ({ ...prev, showBar: true }));
-
                   chrome.runtime.sendMessage({ type: "SETTINGS_UPDATED", reason: "reset_bar_pos" });
+
 
                   setResetBtnText("Reset ✓");
                   setTimeout(() => setResetBtnText("Reset bar position"), 900);

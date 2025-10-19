@@ -86,6 +86,13 @@ chrome.runtime.onStartup?.addListener(async () => {
 });
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+
+  if (msg?.type === "BADGE_COUNT") {
+    const text = typeof msg.count === "string" ? msg.count : "";
+    chrome.action.setBadgeText({ text }); // empty string hides the badge
+    return;
+  }
+
   // 1) Return the raw snapshot you already expose
   if (msg?.type === "GET_SNAPSHOT") {
     sendResponse({ games: lastGames });
@@ -204,8 +211,6 @@ async function pollOnce() {
         );
       }
     }
-
-    await chrome.action.setBadgeText({ text: games.length ? String(games.length) : "" }).catch(() => { });
 
     const live = games.some(g => g.status.phase === "live");
     await chrome.action.setBadgeBackgroundColor({ color: live ? "#eb7272ff" : "#475569" }).catch(() => { });
