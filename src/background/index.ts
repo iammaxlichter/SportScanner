@@ -156,13 +156,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 });
 
-chrome.runtime.onMessage.addListener((msg, _sender, _sendResponse) => {
+// chrome.runtime.onMessage.addListener((msg, _sender, _sendResponse) => {
+//   if (msg?.type === "SETTINGS_UPDATED") {
+//     chrome.tabs.query({}, (tabs) => {
+//       for (const t of tabs) {
+//         if (t.id) chrome.tabs.sendMessage(t.id, { type: "REFRESH_BAR", reason: msg.reason });
+//       }
+//     });
+//   }
+// });
+
+//TABS REPLACEMENT
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "SETTINGS_UPDATED") {
-    chrome.tabs.query({}, (tabs) => {
-      for (const t of tabs) {
-        if (t.id) chrome.tabs.sendMessage(t.id, { type: "REFRESH_BAR", reason: msg.reason });
-      }
-    });
+    // Trigger content scripts via storage change (no tabs permission needed)
+    chrome.storage.local.set({ __ss_refresh_bar: { reason: msg.reason ?? "settings_updated", at: Date.now() } });
+    sendResponse?.({ ok: true });
   }
 });
 
@@ -220,19 +229,31 @@ async function pollOnce() {
   }
 }
 
+// async function broadcast(msg: any) {
+//   // extension pages (popup/options) if open
+//   chrome.runtime.sendMessage(msg).catch(() => { });
+//   // tabs with content script; ignore tabs without receiver
+//   const tabs = await chrome.tabs.query({});
+//   await Promise.all(
+//     tabs.map(async (t) => {
+//       if (!t.id) return;
+//       try {
+//         await chrome.tabs.sendMessage(t.id, msg);
+//       } catch { }
+//     })
+//   );
+// }
+
+//TABS REPLACEMENT
 async function broadcast(msg: any) {
-  // extension pages (popup/options) if open
-  chrome.runtime.sendMessage(msg).catch(() => { });
-  // tabs with content script; ignore tabs without receiver
-  const tabs = await chrome.tabs.query({});
-  await Promise.all(
-    tabs.map(async (t) => {
-      if (!t.id) return;
-      try {
-        await chrome.tabs.sendMessage(t.id, msg);
-      } catch { }
-    })
-  );
+  // Notify extension pages (popup/options) if open
+  chrome.runtime.sendMessage(msg).catch(() => {});
+
+  // Also mirror the latest payload into storage so content scripts can react
+  // (This replaces the tabs.query + tabs.sendMessage fan-out.)
+  try {
+    await chrome.storage.local.set({ __ss_last_broadcast: { msg, at: Date.now() } });
+  } catch {}
 }
 
 /* =====================
