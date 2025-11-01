@@ -1,9 +1,13 @@
 // src/popup/components/Popup.tsx
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "../index.css";
 
-import type { Settings, Theme } from "../../lib/types";
-import { getSettings, setSettings, setSettingsPartial } from "../../lib/storage";
+import type { Settings, Theme, Game, FollowedTeam } from "../../lib/types";
+import { getSettings, setSettings, setSettingsPartial, getFollowedTeams } from "../../lib/storage";
+
+const U = (s?: string | null) => (s ?? "").trim().toUpperCase();
+const key = (league?: string | null, teamId?: string | null) =>
+  `${U(league)}:${U(teamId)}`;
 
 type Status = "idle" | "loading" | "done" | "error";
 
@@ -17,28 +21,34 @@ export default function Popup() {
 
   const [status, setStatus] = useState<Status>("idle");
   const [refreshing, setRefreshing] = useState(false);
+  const [followed, setFollowed] = useState<FollowedTeam[]>([]);
+  const [games, setGames] = useState<Game[]>([]);
 
-  // Load settings on open
   useEffect(() => {
     let alive = true;
     (async () => {
       setStatus("loading");
       try {
-        const s = await getSettings();
+        const [s, sel] = await Promise.all([getSettings(), getFollowedTeams()]);
         if (alive) {
           setLocalSettings(s);
+          setFollowed(sel);
           setStatus("idle");
         }
       } catch {
         if (alive) setStatus("error");
       }
+      try {
+        chrome.runtime.sendMessage({ type: "GET_SNAPSHOT" }, (resp?: { games?: Game[] }) => {
+          if (!alive) return;
+          if (chrome.runtime.lastError) return;
+          if (resp?.games) setGames(resp.games);
+        });
+      } catch { /* ignore */ }
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, []);
 
-  // Derived text for the badge/pill
   const barOn = settings.showBar;
   const pillText = barOn ? "Bar is ON" : "Bar is OFF";
 
@@ -64,19 +74,60 @@ export default function Popup() {
     setRefreshing(true);
     try {
       await chrome.runtime.sendMessage({ type: "REFRESH_NOW_FROM_POPUP" });
+      chrome.runtime.sendMessage({ type: "GET_SNAPSHOT" }, (resp?: { games?: Game[] }) => {
+        if (resp?.games) setGames(resp.games);
+      });
     } finally {
       setRefreshing(false);
     }
   }
 
   async function resetPosition() {
-    // remove barPos only
     const current = await getSettings();
     const next = { ...current };
     delete (next as any).barPos;
     await setSettings(next);
     chrome.runtime.sendMessage({ type: "SETTINGS_UPDATED", reason: "reset_bar_pos" }).catch(() => {});
   }
+
+  const followedKeys = useMemo(() => {
+    const s = new Set<string>();
+    for (const t of followed) s.add(key(t.league, t.teamId));
+    return s;
+  }, [followed]);
+
+  const hasFollowed = followed.length > 0;
+
+  const anyFollowedEligible = useMemo(() => {
+    if (!hasFollowed || games.length === 0) return false;
+    const now = Date.now();
+    const soonMs = 48 * 60 * 60 * 1000;
+
+    for (const g of games) {
+      const isPre = g.status?.phase === "pre";
+      const eligible =
+        !isPre ||
+        (typeof g.startTime === "number" &&
+          g.startTime - now <= soonMs &&
+          g.startTime - now >= -soonMs);
+
+      if (!eligible) continue;
+
+      const hKey = key(g.league as any, g.home?.teamId);
+      const aKey = key(g.league as any, g.away?.teamId);
+      if (followedKeys.has(hKey) || followedKeys.has(aKey)) return true;
+    }
+    return false;
+  }, [games, followedKeys, hasFollowed]);
+
+  const showWhyBox = hasFollowed && !anyFollowedEligible;
+
+  // Pretty list of followed team names
+  const followedNames = useMemo(() => {
+    const names = followed.map(t => t.name ?? `${t.league.toUpperCase()} ${t.teamId}`);
+    // keep it tidy if huge list
+    return names.length > 8 ? names.slice(0, 8).join(", ") + "…" : names.join(", ");
+  }, [followed]);
 
   return (
     <div className="pp">
@@ -95,6 +146,32 @@ export default function Popup() {
         </header>
 
         <div className="pp-divider" />
+
+        {/* WHY NOTHING IS SHOWING (red notice) */}
+        {showWhyBox && (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              margin: "10px 12px 0",
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid #fecaca",
+              background: "#fef2f2",
+              color: "#7f1d1d",
+              fontSize: 13,
+              lineHeight: 1.35,
+            }}
+          >
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>No cards yet for your followed teams</div>
+            <div>
+              {followedNames
+                ? <>The team(s) you follow — <em>{followedNames}</em> — don't have a game live or within the 48-hour pre-game window right now.</>
+                : <>Your followed teams don't have a game live or within the 48-hour pre-game window right now.</>}
+              {" "}Their scorecards will automatically appear when a matchup is <strong>live</strong> or within <strong>48 hours before kickoff</strong>.
+            </div>
+          </div>
+        )}
 
         {/* Floating bar toggle */}
         <section className="pp-section">

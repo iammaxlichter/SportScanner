@@ -54,6 +54,60 @@ export default function ScoreBar() {
     const [theme, setTheme] = useState<Theme>("auto");
     const [justRefreshed, setJustRefreshed] = useState(false);
 
+    const [followed, setFollowed] = useState<Set<string>>(new Set());
+
+    function normalizeFollowed(raw: any): Set<string> {
+        const out = new Set<string>();
+        if (!raw) return out;
+        const byLeague = raw?.byLeague ?? raw;
+
+        if (Array.isArray(byLeague)) {
+            for (const v of byLeague) {
+                if (typeof v === "string") out.add(v);
+                else if (v && typeof v === "object" && typeof v.teamId === "string") {
+                    const k = v.league ? `${v.league}:${v.teamId}` : v.teamId;
+                    out.add(k);
+                    out.add(v.teamId);
+                }
+            }
+            return out;
+        }
+
+        if (byLeague && typeof byLeague === "object") {
+            for (const [lg, list] of Object.entries(byLeague)) {
+                if (Array.isArray(list)) {
+                    for (const t of list) {
+                        if (typeof t === "string") {
+                            out.add(t);
+                            out.add(`${lg}:${t}`);
+                        }
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
+    function loadFollowedTeams() {
+        chrome.storage.sync
+            .get(["followedTeams", "followed", "teams"])
+            .then((res) => {
+                const raw = res.followedTeams ?? res.followed ?? res.teams;
+                setFollowed(normalizeFollowed(raw));
+            })
+            .catch(() => {});
+    }
+
+    useEffect(() => {
+        loadFollowedTeams();
+        const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+            if (area !== "sync") return;
+            if (changes.followedTeams || changes.followed || changes.teams) loadFollowedTeams();
+        };
+        chrome.storage.onChanged.addListener(onChanged);
+        return () => chrome.storage.onChanged.removeListener(onChanged);
+    }, []);
+
     const showBarRef = useRef(showBar);
     useEffect(() => { showBarRef.current = showBar; }, [showBar]);
 
@@ -95,6 +149,21 @@ export default function ScoreBar() {
         return out;
     }, [games]);
 
+    // Does displayGames contain at least one followed team?
+    const hasFollowedInDisplay = useMemo(() => {
+        if (!displayGames.length || followed.size === 0) return false;
+        const isFollowed = (league: string, teamId?: string | null) => {
+            if (!teamId) return false;
+            return followed.has(teamId) || followed.has(`${league}:${teamId}`);
+        };
+        for (const g of displayGames) {
+            if (isFollowed(g.league as any, g.home?.teamId) || isFollowed(g.league as any, g.away?.teamId)) {
+                return true;
+            }
+        }
+        return false;
+    }, [displayGames, followed]);
+
     function applySettingsFrom(obj: any) {
         const next = obj ?? {};
         if (typeof next.showBar !== "undefined") setShowBar(next.showBar);
@@ -123,6 +192,8 @@ export default function ScoreBar() {
             } else if (msg?.type === "REFRESH_BAR") {
                 chrome.storage.sync.get(["settings"]).then(({ settings }) => {
                     applySettingsFrom(settings);
+                    // refresh followed teams on a REFRESH_BAR as well
+                    loadFollowedTeams();
                     const sb = typeof settings?.showBar !== "undefined" ? settings.showBar : showBarRef.current;
                     if (sb) {
                         setJustRefreshed(true);
@@ -277,7 +348,8 @@ export default function ScoreBar() {
         };
     }, [isDragging, dragOffset, pos, anchor, compact]);
 
-    if (!showBar || !pos || games.length === 0) return null;
+    // === Gate the render on followed teams present in displayGames ===
+    if (!showBar || !pos || games.length === 0 || !hasFollowedInDisplay) return null;
 
     const handleDragStart = (clientX: number, clientY: number) => {
         setAnchor("free");
