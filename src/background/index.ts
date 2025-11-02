@@ -37,57 +37,81 @@ async function pollOnce() {
       for (const g of updates) {
         const title =
           g.status.phase === "final" ? "Final"
-            : g.status.phase === "live" ? "Score update"
-              : "Game update";
-        const body = `${g.away.name} ${g.away.score} @ ${g.home.name} ${g.home.score}` +
+          : g.status.phase === "live" ? "Score update"
+          : "Game update";
+
+        const body =
+          `${g.away.name} ${g.away.score} @ ${g.home.name} ${g.home.score}` +
           (g.status.clock ? ` — ${g.status.clock}` : "");
+
         chrome.notifications.create(
           `ss-${gameKey(g)}-${g.home.score}-${g.away.score}`,
-          { type: "basic", iconUrl: "icons/icon128.png", title: `[${g.league.toUpperCase()}] ${title}`, message: body, priority: 1 }
+          {
+            type: "basic",
+            iconUrl: "icons/icon128.png",
+            title: `[${g.league.toUpperCase()}] ${title}`,
+            message: body,
+            priority: 1,
+          }
         );
       }
     }
 
     const live = games.some(g => g.status.phase === "live");
-    await chrome.action.setBadgeBackgroundColor({ color: live ? "#eb7272ff" : "#475569" }).catch(() => { });
+    try {
+      await chrome.action.setBadgeBackgroundColor({ color: live ? "#eb7272ff" : "#475569" });
+    } catch {}
+
     await broadcast({ type: "GAMES_UPDATE", games });
   } catch (e) {
     console.error("[SportScanner] pollOnce error", e);
   }
 }
 
+// ---- Messaging helpers wired into initMessaging ----
 function getSnapshot() {
   return lastGames;
 }
 
 function setBadgeText(text: string) {
-  chrome.action.setBadgeText({ text }).catch?.(() => { });
+  try {
+    chrome.action.setBadgeText({ text });
+  } catch {}
 }
 
+/**
+ * Broadcast to extension pages and also mirror the payload into storage so
+ * content scripts can react (no tabs permission required).
+ */
 async function broadcast(msg: any) {
-  chrome.runtime.sendMessage(msg).catch(() => { });
-  const tabs = await chrome.tabs.query({});
-  await Promise.all(
-    tabs.map(async (t) => {
-      if (!t.id) return;
-      try { await chrome.tabs.sendMessage(t.id, msg); } catch { }
-    })
-  );
+  try {
+    chrome.runtime.sendMessage(msg);
+  } catch {}
+
+  try {
+    await chrome.storage.local.set({ __ss_last_broadcast: { msg, at: Date.now() } });
+  } catch {}
 }
 
+/**
+ * Ask content scripts to refresh via a storage ping (replaces tabs.query fan-out).
+ */
 async function broadcastRefresh(reason?: string) {
-  const tabs = await chrome.tabs.query({});
-  for (const t of tabs) {
-    if (t.id) {
-      try { await chrome.tabs.sendMessage(t.id, { type: "REFRESH_BAR", reason }); } catch { }
-    }
-  }
+  try {
+    await chrome.storage.local.set({
+      __ss_refresh_bar: { reason: reason ?? "settings_updated", at: Date.now() },
+    });
+  } catch {}
 }
 
+// ---- Lifecycle ----
 async function init() {
   console.log("[SportScanner] service worker loaded");
+
+  // Alarms lifecycle (centralized in ./alarms)
   initAlarms(pollOnce);
 
+  // Messaging glue (centralized in ./messaging)
   initMessaging({
     getSnapshot,
     onSettingsUpdated: async () => {
