@@ -1,61 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+//src/options/index.tsx
 import { createRoot } from "react-dom/client";
+import React, { useEffect, useMemo, useState } from "react";
 import type { FollowedTeam, League, Settings } from "../lib/types";
 import { getFollowedTeams, setFollowedTeams, getSettings, setSettings } from "../lib/storage";
 import { LEAGUE_TEAMS } from "../lib/teams";
+import { useAsync } from "./hooks/useAsync";
+import { TeamGrid } from "./components/TeamGrid";
+import { SettingsPanel } from "./components/SettingsPanel";
 
-function useAsync<T>(fn: () => Promise<T>, deps: any[] = []) {
-  const [state, setState] = useState<{ loading: boolean; value?: T; error?: unknown }>({ loading: true });
-  useEffect(() => {
-    let alive = true;
-    setState({ loading: true });
-    fn().then(v => alive && setState({ loading: false, value: v }))
-      .catch(e => alive && setState({ loading: false, error: e }));
-    return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
-  return state;
-}
-
-function logoFor(league: League, teamId: string) {
-  const abbr = teamId.toLowerCase();
-  const baseByLeague: Record<League, string> = {
-    nfl: "https://a.espncdn.com/i/teamlogos/nfl/500",
-    nba: "https://a.espncdn.com/i/teamlogos/nba/500",
-    mlb: "https://a.espncdn.com/i/teamlogos/mlb/500",
-    nhl: "https://a.espncdn.com/i/teamlogos/nhl/500",
-    ncaaf: "https://a.espncdn.com/i/teamlogos/ncaa/500",
-  };
-  const base = baseByLeague[league];
-  return `${base}/${abbr}.png`;
-}
-
-// ---- NEW: helpers & types for filters/sort ----
-type StatusFilter = "all" | "followed" | "unfollowed";
-type SortBy = "league" | "teamId" | "name";
-type SearchScope = "league" | "all";
-
-// ---- NEW: types for games + filter ----
-type GameFilter = "none" | "today" | "live";
-type Game = {
-  league: League;
-  homeId: string;          // canonical teamId (e.g., "DAL")
-  awayId: string;          // canonical teamId (e.g., "HOU")
-  startUtc: string;        // ISO UTC start
-  status: "scheduled" | "in_progress" | "final" | "postponed";
-};
-
-function isToday(dateIso: string) {
-  const d = new Date(dateIso);
-  const now = new Date();
-  return (
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate()
-  );
-}
-
-// small shared button style
 const chipBtn: React.CSSProperties = {
   padding: '6px 10px',
   borderRadius: 8,
@@ -64,128 +16,66 @@ const chipBtn: React.CSSProperties = {
   cursor: 'pointer',
 };
 
-function InfoBadge({ text }: { text: string }) {
-  return (
-    <span
-      style={{
-        position: "absolute",
-        top: -6,            // overlap corner
-        right: -6,
-        width: 12,
-        height: 12,
-        borderRadius: "50%",
-        border: "1px solid #94a3b8",
-        background: "#f8fafc",
-        color: "#334155",
-        fontSize: 11,
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 2,
-      }}
-      onMouseEnter={(e) => {
-        const tooltip = document.createElement("div");
-        tooltip.textContent = text;
-        Object.assign(tooltip.style, {
-          position: "absolute",
-          top: "100%",
-          right: 0,
-          transform: "translateY(6px)",
-          background: "#0f172a",
-          color: "#fff",
-          fontSize: "12px",
-          padding: "6px 8px",
-          borderRadius: "6px",
-          whiteSpace: "nowrap",
-          zIndex: "999",
-          pointerEvents: "none",
-          boxShadow: "0 6px 16px rgba(15,23,42,.2)",
-        });
-        tooltip.className = "tooltip";
-        e.currentTarget.appendChild(tooltip);
-      }}
-      onMouseLeave={(e) => {
-        const t = e.currentTarget.querySelector(".tooltip");
-        if (t) t.remove();
-      }}
-      aria-label={text}
-      title={text} // fallback for keyboard users
-      role="img"
-    >
-      i
-    </span>
-  );
-}
+type StatusFilter = "all" | "followed" | "unfollowed";
+type SortBy = "league" | "teamId" | "name";
+type SearchScope = "league" | "all";
+type GameFilter = "none" | "today" | "live";
 
-type ButtonWithInfoProps = {
-  children: React.ReactNode;
-  onClick?: React.MouseEventHandler<HTMLButtonElement>;
-  tooltip: string;
-  style?: React.CSSProperties;
-  disabled?: boolean;
+type Game = {
+  league: League;
+  homeId: string;
+  awayId: string;
+  startUtc: string;
+  status: "scheduled" | "in_progress" | "final" | "postponed";
 };
 
-function ButtonWithInfo({ children, onClick, tooltip, style, disabled }: ButtonWithInfoProps) {
-  return (
-    <span style={{ position: "relative", display: "inline-block" }}>
-      <button onClick={onClick} style={{ ...chipBtn, ...style }} disabled={disabled}>
-        {children}
-      </button>
-      <InfoBadge text={tooltip} />
-    </span>
-  );
+function isToday(dateIso: string) {
+  const d = new Date(dateIso);
+  const now = new Date();
+  return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
 }
 
 function Options() {
   const ALL_LEAGUES = Object.keys(LEAGUE_TEAMS) as League[];
 
-  const [resetBtnText, setResetBtnText] = useState("Reset bar position");
   const [league, setLeague] = useState<League>("nfl");
   const [search, setSearch] = useState("");
-
-  // NEW: more filters
   const [searchScope, setSearchScope] = useState<SearchScope>("league");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [sortBy, setSortBy] = useState<SortBy>("league");
-
-  // ---- NEW: game filter + games from background ----
   const [gameFilter, setGameFilter] = useState<GameFilter>("none");
   const [games, setGames] = useState<Game[]>([]);
+  const [justSaved, setJustSaved] = useState(false);
 
   useEffect(() => {
     const v = localStorage.getItem("ss_gameFilter");
     if (v === "today" || v === "live" || v === "none") setGameFilter(v as GameFilter);
   }, []);
-
-  useEffect(() => {
-    localStorage.setItem("ss_gameFilter", gameFilter);
-  }, [gameFilter]);
+  useEffect(() => { localStorage.setItem("ss_gameFilter", gameFilter); }, [gameFilter]);
 
   const leaguesInScope: League[] = useMemo(
     () => (searchScope === "all" ? (Object.keys(LEAGUE_TEAMS) as League[]) : [league]),
     [searchScope, league]
   );
+
   useEffect(() => {
     let cancelled = false;
-    chrome.runtime.sendMessage(
-      { type: "GET_GAMES_FOR_LEAGUES", leagues: leaguesInScope },
-      (resp?: { games?: Game[] }) => {
-        if (!cancelled && resp?.games) setGames(resp.games);
-      }
-    );
+    try {
+      chrome.runtime.sendMessage(
+        { type: "GET_GAMES_FOR_LEAGUES", leagues: leaguesInScope },
+        (resp?: { games?: Game[] }) => {
+          if (!cancelled && resp?.games) setGames(resp.games);
+        }
+      );
+    } catch { }
     return () => { cancelled = true; };
   }, [leaguesInScope]);
 
-  // Local (unsaved) working copies
-  const [settings, setLocalSettings] = useState<Settings>({
-    pollingSeconds: 30,
-    compact: true,
-    showBar: true,
-    theme: "auto",
-  });
+  // working copies
+  const [settings, setLocalSettings] = useState<Settings>({ pollingSeconds: 30, compact: true, showBar: true, theme: "auto" });
   const [selected, setSelected] = useState<FollowedTeam[]>([]);
 
-  // Load initial data
+  // init
   const init = useAsync(async () => {
     const [sel, s] = await Promise.all([getFollowedTeams(), getSettings()]);
     return { sel, s };
@@ -198,13 +88,7 @@ function Options() {
     }
   }, [init.value]);
 
-  // Build a flat list of all teams once
-  const ALL_TEAMS: FollowedTeam[] = useMemo(
-    () => (Object.values(LEAGUE_TEAMS) as FollowedTeam[][]).flat(),
-    []
-  );
-
-  // Selection helpers
+  const ALL_TEAMS: FollowedTeam[] = useMemo(() => (Object.values(LEAGUE_TEAMS) as FollowedTeam[][]).flat(), []);
   const selectedKey = (t: FollowedTeam) => `${t.league}:${t.teamId}`;
   const selectedIds = useMemo(() => new Set(selected.map(selectedKey)), [selected]);
 
@@ -213,44 +97,27 @@ function Options() {
     ALL_TEAMS.forEach(t => m.set(`${t.league}:${t.teamId}`, t));
     return m;
   }, [ALL_TEAMS]);
+  const withLogo = (t: FollowedTeam): FollowedTeam => (t.logo ? t : { ...t, logo: TEAM_INDEX.get(`${t.league}:${t.teamId}`)?.logo });
 
-  const withLogo = (t: FollowedTeam): FollowedTeam => (
-    t.logo ? t : { ...t, logo: TEAM_INDEX.get(`${t.league}:${t.teamId}`)?.logo }
-  );
-
-  const removeTeam = (t: FollowedTeam) => {
-    const key = selectedKey(t);
-    setSelected(prev => prev.filter(x => selectedKey(x) !== key));
-  };
-
+  const removeTeam = (t: FollowedTeam) => setSelected(prev => prev.filter(x => selectedKey(x) !== selectedKey(t)));
   const toggleTeam = (t: FollowedTeam) => {
     const key = selectedKey(t);
-    const next = selectedIds.has(key)
-      ? selected.filter(x => selectedKey(x) !== key)
-      : [...selected, withLogo(t)];
-    setSelected(next);
+    setSelected(prev => prev.some(x => selectedKey(x) === key) ? prev.filter(x => selectedKey(x) !== key) : [...prev, withLogo(t)]);
   };
-
-  const selectAllVisible = (visibleList: FollowedTeam[]) => {
+  const selectAllVisible = (visible: FollowedTeam[]) => {
     const merge = new Map<string, FollowedTeam>();
     for (const t of selected) merge.set(selectedKey(t), withLogo(t));
-    for (const t of visibleList) merge.set(selectedKey(t), withLogo(t));
+    for (const t of visible) merge.set(selectedKey(t), withLogo(t));
     setSelected(Array.from(merge.values()));
   };
-
-  const clearAllVisible = (visibleList: FollowedTeam[]) => {
-    const vis = new Set(visibleList.map(selectedKey));
+  const clearAllVisible = (visible: FollowedTeam[]) => {
+    const vis = new Set(visible.map(selectedKey));
     setSelected(selected.filter(t => !vis.has(selectedKey(t))));
   };
 
-  // ---- Compute the base pool for the grid ----
-  const basePool: FollowedTeam[] = useMemo(() => {
-    if (searchScope === "all") return ALL_TEAMS;
-    return LEAGUE_TEAMS[league] ?? [];
-  }, [searchScope, league, ALL_TEAMS]);
+  const basePool = useMemo(() => (searchScope === "all" ? ALL_TEAMS : (LEAGUE_TEAMS[league] ?? [])), [searchScope, league, ALL_TEAMS]);
 
-  // ---- Apply search ----
-  const filteredBySearch: FollowedTeam[] = useMemo(() => {
+  const filteredBySearch = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return basePool;
     return basePool.filter(t =>
@@ -260,14 +127,12 @@ function Options() {
     );
   }, [basePool, search]);
 
-  // ---- Apply status filter ----
-  const filteredByStatus: FollowedTeam[] = useMemo(() => {
+  const filteredByStatus = useMemo(() => {
     if (statusFilter === "all") return filteredBySearch;
     const wantFollowed = statusFilter === "followed";
     return filteredBySearch.filter(t => selectedIds.has(selectedKey(t)) === wantFollowed);
   }, [filteredBySearch, statusFilter, selectedIds]);
 
-  // ---- NEW: sets for today/live teams from games ----
   const teamsWithGameToday = useMemo(() => {
     const s = new Set<string>();
     for (const g of games) {
@@ -290,15 +155,13 @@ function Options() {
     return s;
   }, [games]);
 
-  // ---- NEW: Apply game filter after status filter ----
-  const filteredByGame: FollowedTeam[] = useMemo(() => {
+  const filteredByGame = useMemo(() => {
     if (gameFilter === "none") return filteredByStatus;
-    const allow = gameFilter === "live" ? teamsLiveNow : teamsWithGameToday; // "today"
+    const allow = gameFilter === "live" ? teamsLiveNow : teamsWithGameToday;
     return filteredByStatus.filter(t => allow.has(`${t.league}:${t.teamId}`));
   }, [filteredByStatus, gameFilter, teamsLiveNow, teamsWithGameToday]);
 
-  // ---- Sort (now sorts filteredByGame) ----
-  const sortedVisible: FollowedTeam[] = useMemo(() => {
+  const sortedVisible = useMemo(() => {
     const arr = [...filteredByGame];
     arr.sort((a, b) => {
       if (sortBy === "league") {
@@ -306,16 +169,13 @@ function Options() {
         return a.name.localeCompare(b.name);
       }
       if (sortBy === "teamId") return a.teamId.localeCompare(b.teamId);
-      return a.name.localeCompare(b.name); // "name"
+      return a.name.localeCompare(b.name);
     });
     return arr;
   }, [filteredByGame, sortBy]);
 
-  // ---- Dirty tracking baselines ----
   const [baselineSel, setBaselineSel] = useState<FollowedTeam[]>([]);
-  const [baselineSettings, setBaselineSettings] = useState<Settings>({
-    pollingSeconds: 30, compact: true, showBar: true, theme: "auto",
-  });
+  const [baselineSettings, setBaselineSettings] = useState<Settings>({ pollingSeconds: 30, compact: true, showBar: true, theme: "auto" });
 
   useEffect(() => {
     if (init.value) {
@@ -326,7 +186,6 @@ function Options() {
       setBaselineSettings(init.value.s);
       if (selWithLogos[0]) setLeague(selWithLogos[0].league);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [init.value, TEAM_INDEX]);
 
   const dirty =
@@ -338,55 +197,18 @@ function Options() {
     await setSettings(settings);
     setBaselineSel(selected);
     setBaselineSettings(settings);
-    chrome.runtime.sendMessage({ type: "SETTINGS_UPDATED" });
-    const btn = document.getElementById("save-btn");
-    if (btn) {
-      const orig = btn.textContent;
-      btn.textContent = "Updated ✓";
-      setTimeout(() => (btn.textContent = orig || "Update Bar"), 900);
-    }
+    chrome.runtime.sendMessage({ type: "SETTINGS_UPDATED" }).catch(() => { });
+    setJustSaved(true);
+    setTimeout(() => setJustSaved(false), 900);
   };
 
-
   return (
-    <div
-      style={{
-        fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, Inter, sans-serif',
-        color: '#0f172a',
-      }}
-    >
-      {/* Sticky header with Update Bar */}
-      <div
-        style={{
-          position: 'sticky',
-          top: 0,
-          zIndex: 10,
-          background: '#ffffffcc',
-          backdropFilter: 'saturate(180%) blur(8px)',
-          borderBottom: '1px solid #e5e7eb',
-        }}
-      >
-        <div
-          style={{
-            maxWidth: 980,
-            margin: '0 auto',
-            padding: '10px 16px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-            justifyContent: 'space-between',
-          }}
-        >
+    <div style={{ fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, Inter, sans-serif', color: '#0f172a' }}>
+      {/* header */}
+      <div style={{ position: 'sticky', top: 0, zIndex: 10, background: '#ffffffcc', backdropFilter: 'saturate(180%) blur(8px)', borderBottom: '1px solid #e5e7eb' }}>
+        <div style={{ maxWidth: 980, margin: '0 auto', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 12, justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-            <img
-              src="../assets/icons/icon48.png"
-              alt="SportScanner logo"
-              style={{
-                width: 32,
-                height: 32,
-                objectFit: 'contain',
-              }}
-            />
+            <img src="../assets/icons/icon48.png" alt="SportScanner logo" style={{ width: 32, height: 32, objectFit: 'contain' }} />
             <h1 style={{ margin: 0, fontSize: 18 }}>SportScanner — Options</h1>
             {dirty && <span style={{ fontSize: 12, color: '#0ea5e9' }}>Unsaved changes</span>}
           </div>
@@ -404,51 +226,33 @@ function Options() {
               fontWeight: 600,
             }}
           >
-            Update Bar
+            {justSaved ? "Updated ✓" : "Update Bar"}
           </button>
-
+          <div aria-live="polite" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(1px,1px,1px,1px)" }}>
+            {justSaved ? "Settings updated" : ""}
+          </div>
         </div>
       </div>
 
-      {/* Main content */}
+      {/* main */}
       <div style={{ maxWidth: 980, margin: '16px auto', padding: '0 16px', display: 'grid', gap: 16 }}>
-        {/* Controls row */}
-        <section
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: 12,
-          }}
-        >
-          {/* League + search + filters */}
+        <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          {/* left: find/select teams */}
           <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12 }}>
+            {/* scope + league + search */}
             <div style={{ display: 'grid', gap: 10, marginBottom: 8 }}>
-              {/* Search scope */}
               <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                 <label style={{ fontWeight: 600 }}>Search scope</label>
                 <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  <input
-                    type="radio"
-                    name="scope"
-                    value="league"
-                    checked={searchScope === "league"}
-                    onChange={() => setSearchScope("league")}
-                  />
+                  <input type="radio" name="scope" value="league" checked={searchScope === "league"} onChange={() => setSearchScope("league")} />
                   Current league
                 </label>
                 <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  <input
-                    type="radio"
-                    name="scope"
-                    value="all"
-                    checked={searchScope === "all"}
-                    onChange={() => setSearchScope("all")}
-                  />
+                  <input type="radio" name="scope" value="all" checked={searchScope === "all"} onChange={() => setSearchScope("all")} />
                   All leagues
                 </label>
               </div>
 
-              {/* League (only matters when scope = league) */}
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 20 }}>
                 <label style={{ fontWeight: 600, opacity: searchScope === "all" ? 0.5 : 1 }}>League</label>
                 <select
@@ -464,27 +268,16 @@ function Options() {
                   ))}
                 </select>
 
-                {/* Search input */}
                 <input
-                  placeholder={
-                    searchScope === "all"
-                      ? "Search all leagues by name/ID (e.g. DAL)"
-                      : "Search league by name/ID (e.g. DAL)"
-                  }
+                  placeholder={searchScope === "all" ? "Search all leagues by name/ID (e.g. DAL)" : "Search league by name/ID (e.g. DAL)"}
                   value={search}
                   onChange={e => setSearch(e.target.value)}
                   style={{ flex: 1, padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb' }}
                 />
               </div>
 
-              {/* Extra filters */}
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: '1fr 1fr',
-                gap: 10,
-                alignItems: 'center',
-                marginTop: 20
-              }}>
+              {/* simple filters row */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, alignItems: 'center', marginTop: 20 }}>
                 <label style={{ display: 'block' }}>
                   <div style={{ fontWeight: 600, marginBottom: 4 }}>Follow status</div>
                   <select
@@ -512,7 +305,7 @@ function Options() {
                 </label>
               </div>
 
-              {/* ---- NEW: GAME FILTER ROW ---- */}
+              {/* game filter row */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 20 }}>
                 <label style={{ display: 'block' }}>
                   <div style={{ fontWeight: 600, marginBottom: 4 }}>Game filter</div>
@@ -529,294 +322,43 @@ function Options() {
                 </label>
 
                 <div style={{ display: "flex", alignItems: "end", gap: 8 }}>
-                  <ButtonWithInfo
-                    onClick={() => setGameFilter("today")}
-                    tooltip="Show only teams with games scheduled today."
-                  >
-                    Today
-                  </ButtonWithInfo>
-
-                  <ButtonWithInfo
-                    onClick={() => setGameFilter("live")}
-                    tooltip="Show only teams currently in progress."
-                  >
-                    Live
-                  </ButtonWithInfo>
-
-                  <ButtonWithInfo
-                    onClick={() => setGameFilter("none")}
-                    tooltip="Clear all game filters."
-                  >
-                    Clear
-                  </ButtonWithInfo>
-                </div>
-
-              </div>
-              {/* ---- END GAME FILTER ROW ---- */}
-            </div>
-
-            {/* Available teams */}
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, marginTop: 30 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <h3 style={{ margin: 0 }}>
-                    Teams — {searchScope === "all" ? "All Leagues" : league.toUpperCase()}
-                  </h3>
-                  <span style={{ color: '#64748b', fontSize: 12 }}>
-                    {sortedVisible.length} shown
-                  </span>
-                </div>
-
-                <div style={{ display: "flex", gap: 8 }}>
-                  <ButtonWithInfo
-                    onClick={() => selectAllVisible(sortedVisible)}
-                    tooltip="Follow all teams currently visible in this list."
-                  >
-                    Select all
-                  </ButtonWithInfo>
-
-                  <ButtonWithInfo
-                    onClick={() => clearAllVisible(sortedVisible)}
-                    tooltip="Unfollow all teams currently visible in this list."
-                  >
-                    Clear all selected
-                  </ButtonWithInfo>
-                </div>
-
-
-              </div>
-
-              <div id="teams-panel">
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 8 }}>
-                  {sortedVisible.map(t => {
-                    const checked = selectedIds.has(selectedKey(t));
-                    return (
-                      <label
-                        key={selectedKey(t)}
-                        style={{
-                          display: "flex", alignItems: "center", gap: 10,
-                          padding: "8px 10px", border: "1px solid #e5e7eb", borderRadius: 10,
-                          background: checked ? "#f1f5f9" : "#fff", cursor: "pointer"
-                        }}
-                      >
-                        <input type="checkbox" checked={checked} onChange={() => toggleTeam(t)} />
-                        <img
-                          src={t.logo ?? logoFor(t.league, t.teamId)}
-                          alt={t.name}
-                          referrerPolicy="no-referrer"
-                          onError={(e) => {
-                            const img = e.currentTarget as HTMLImageElement;
-                            if (img.dataset.fallback !== "1") {
-                              img.dataset.fallback = "1";
-                              img.src = logoFor(t.league, t.teamId);
-                            } else {
-                              img.style.display = "none";
-                            }
-                          }}
-                          style={{ width: 16, height: 16, borderRadius: 9999, objectFit: "cover", background: "#fff" }}
-                        />
-                        <span style={{ fontWeight: 700, width: 42 }}>{t.teamId}</span>
-                        <span style={{ opacity: .9 }}>{t.name}</span>
-                        <span style={{ marginLeft: 'auto', color: '#64748b', fontSize: 12 }}>
-                          {t.league.toUpperCase()}
-                        </span>
-                      </label>
-                    );
-                  })}
-                  {!sortedVisible.length && (
-                    <div style={{ color: '#64748b' }}>
-                      {gameFilter === "today"
-                        ? "No teams have a game today in this scope."
-                        : gameFilter === "live"
-                          ? "No teams are currently live in this scope."
-                          : `No teams match your filters${search ? ` for “${search}”` : ""}.`}
-                    </div>
-                  )}
+                  <button onClick={() => setGameFilter("today")} style={chipBtn} title="Show only teams with games scheduled today.">Today</button>
+                  <button onClick={() => setGameFilter("live")} style={chipBtn} title="Show only teams currently in progress.">Live</button>
+                  <button onClick={() => setGameFilter("none")} style={chipBtn} title="Clear all game filters.">Clear</button>
                 </div>
               </div>
             </div>
+
+            {/* teams grid */}
+            <TeamGrid
+              leagueLabel={searchScope === "all" ? "All Leagues" : league.toUpperCase()}
+              sortedVisible={sortedVisible}
+              selectedKey={selectedKey}
+              selectedIds={selectedIds}
+              toggleTeam={toggleTeam}
+              selectAllVisible={selectAllVisible}
+              clearAllVisible={clearAllVisible}
+              gameFilter={gameFilter}
+              search={search}
+            />
           </div>
 
-          {/* Settings + summary */}
-          <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12 }}>
-            <h3 style={{ marginTop: 0 }}>Settings</h3>
-
-            {/* Polling */}
-            <label style={{ display: 'block', marginBottom: 10, marginTop: 20 }}>
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>Refresh cadence (minutes)</div>
-              <input
-                type="number"
-                min={1}
-                value={Math.max(1, Math.round(settings.pollingSeconds / 60))}
-                onChange={e => {
-                  const mins = Math.max(1, Number(e.target.value) || 1);
-                  setLocalSettings({ ...settings, pollingSeconds: mins * 60 });
-                }}
-                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb', width: 140 }}
-              />
-              <div style={{ color: '#64748b', fontSize: 10, marginTop: 4 }}>
-                Background updates run at least once per minute (Chrome limit).
-              </div>
-            </label>
-
-            {/* Compact */}
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 20, marginBottom: 4 }}>
-              <input
-                type="checkbox"
-                checked={settings.compact}
-                onChange={e => setLocalSettings({ ...settings, compact: e.target.checked })}
-              />
-              <span>Compact bar</span>
-            </label>
-            <div style={{ color: '#64748b', fontSize: 10 }}>
-              Shrink the bar height and spacing for a tighter fit. (Doesn't display team names, only logos)
-            </div>
-
-            {/* Theme */}
-            <label style={{ display: 'block', marginBottom: 12, marginTop: 20 }}>
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>Theme</div>
-              <select
-                value={settings.theme ?? "auto"}
-                onChange={e => setLocalSettings({ ...settings, theme: e.target.value as any })}
-                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb', width: 180 }}
-              >
-                <option value="auto">Auto (system)</option>
-                <option value="light">Light</option>
-                <option value="dark">Dark</option>
-              </select>
-              <div style={{ color: '#64748b', fontSize: 10, marginTop: 4 }}>
-                Auto follows your OS appearance.
-              </div>
-            </label>
-
-            {/* Followed summary */}
-            <div style={{ marginTop: 20 }}>
-              <div style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 8
-              }}>
-                <strong>Following ({selected.length}):</strong>
-
-                <button
-                  type="button"
-                  disabled={!selected.length}
-                  onClick={() => {
-                    if (selected.length === 0) return;
-                    if (confirm(`Remove all ${selected.length} followed team(s)?`)) {
-                      setSelected([]); // (persist after with "Update Bar")
-                    }
-                  }}
-                  title="Remove all followed teams"
-                  style={{
-                    padding: "4px 10px",
-                    borderRadius: 9999,
-                    border: "1px solid #e5e7eb",
-                    background: "#fff",
-                    color: "#0f172a",
-                    fontSize: 12,
-                    cursor: selected.length ? "pointer" : "not-allowed",
-                  }}
-                >
-                  Clear all
-                </button>
-              </div>
-
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-                {selected.map(t => (
-                  <span
-                    key={selectedKey(t)}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 6,
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 9999,
-                      padding: "4px 10px",
-                      background: "#f8fafc",
-                      color: "#0f172a",
-                    }}
-                  >
-                    <img
-                      src={t.logo ?? logoFor(t.league, t.teamId)}
-                      alt={t.name}
-                      referrerPolicy="no-referrer"
-                      onError={(e) => {
-                        const img = e.currentTarget as HTMLImageElement;
-                        if (img.dataset.fallback !== "1") {
-                          img.dataset.fallback = "1";
-                          img.src = logoFor(t.league, t.teamId);
-                        } else {
-                          img.style.display = "none";
-                        }
-                      }}
-                      style={{ width: 16, height: 16, borderRadius: 9999, objectFit: "cover", background: "#fff" }}
-                    />
-                    {t.teamId}&nbsp;·&nbsp;{t.name}
-                    <button
-                      type="button"
-                      onClick={() => removeTeam(t)}
-                      aria-label={`Unfollow ${t.name}`}
-                      title="Remove"
-                      style={{
-                        marginLeft: 6,
-                        width: 18,
-                        height: 18,
-                        display: "inline-flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        borderRadius: 9999,
-                        border: "1px solid #94a3b8",
-                        background: "#fff",
-                        color: "#334155",
-                        fontSize: 12,
-                        lineHeight: 1,
-                        padding: 0,
-                        cursor: "pointer",
-                        appearance: "none",
-                        WebkitAppearance: "none",
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          removeTeam(t);
-                        }
-                      }}
-                    >
-                      x
-                    </button>
-                  </span>
-                ))}
-                {!selected.length && <span style={{ color: '#64748b' }}>None yet</span>}
-              </div>
-            </div>
-
-            {/* Reset bar position */}
-            <div style={{ marginTop: 16 }}>
-              <button
-                onClick={async () => {
-                  const res = await chrome.storage.sync.get(["settings"]);
-                  const prev = res.settings ?? {};
-                  const next = { ...prev };
-                  delete (next as any).barPos;
-
-                  await chrome.storage.sync.set({ settings: next });
-                  chrome.runtime.sendMessage({ type: "SETTINGS_UPDATED", reason: "reset_bar_pos" });
-
-
-                  setResetBtnText("Reset ✓");
-                  setTimeout(() => setResetBtnText("Reset bar position"), 900);
-
-                }}
-                title="Reset bar position to default"
-                style={{ ...chipBtn, padding: "8px 12px" }}
-              >
-                {resetBtnText}
-              </button>
-
-            </div>
-          </div>
+          {/* right: settings + chips + reset */}
+          <SettingsPanel
+            settings={settings}
+            setSettings={setLocalSettings}
+            selected={selected}
+            removeTeam={removeTeam}
+            onResetBarPos={async () => {
+              const res = await chrome.storage.sync.get(["settings"]);
+              const prev = res.settings ?? {};
+              const next = { ...prev };
+              delete (next as any).barPos;
+              await chrome.storage.sync.set({ settings: next });
+              chrome.runtime.sendMessage({ type: "SETTINGS_UPDATED", reason: "reset_bar_pos" }).catch(() => { });
+            }}
+            onClearAllSelected={() => setSelected([])}
+          />
         </section>
       </div>
     </div>

@@ -1,5 +1,1 @@
-  "icons": {
-    "16": "public/icons/icon16.png",
-    "48": "public/icons/icon48.png",
-    "128": "public/icons/icon128.png"
-  } INSIDE OF manifest.json at the very end of it
+When there is a team selected but they don't play today, the drag bar still shows when it shouldnt
