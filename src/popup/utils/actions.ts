@@ -1,25 +1,27 @@
-// src/popup/utils/actions.ts
 import { setSettingsPartial } from "../../lib/storage";
 
 export async function refreshNow(setToast: (msg: string) => void) {
-    try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (tab?.id) await chrome.tabs.sendMessage(tab.id, { type: "REFRESH_BAR" });
-        setToast("Refreshed ✓");
-    } catch {
-        setToast("Not available");
-    }
+  try {
+    // Ask background to poll + broadcast to content scripts.
+    await chrome.runtime.sendMessage({ type: "REFRESH_NOW_FROM_POPUP" });
+    setToast("Refreshed ✓");
+  } catch {
+    setToast("Not available");
+  }
 }
 
 export async function resetBarPos(setToast: (msg: string) => void) {
-    await setSettingsPartial({ barPos: undefined });
-    setToast("Reset ✓");
+  await setSettingsPartial({ barPos: undefined });
+  // Background will read settings on SETTINGS_UPDATED → REFRESH_BAR
+  await chrome.runtime.sendMessage({ type: "SETTINGS_UPDATED", reason: "popup_reset_pos" });
+  setToast("Reset ✓");
 }
 
 export function openOptions() {
-    chrome.runtime.openOptionsPage();
+  chrome.runtime.openOptionsPage();
 }
 
 export async function updateSettings(patch: Partial<any>) {
-    await setSettingsPartial(patch);
+  await setSettingsPartial(patch);
+  await chrome.runtime.sendMessage({ type: "SETTINGS_UPDATED", reason: "popup_update_settings" });
 }

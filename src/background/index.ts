@@ -43,16 +43,16 @@ async function pollOnce() {
           `${g.away.name} ${g.away.score} @ ${g.home.name} ${g.home.score}` +
           (g.status.clock ? ` — ${g.status.clock}` : "");
 
-        chrome.notifications.create(
-          `ss-${gameKey(g)}-${g.home.score}-${g.away.score}`,
-          {
-            type: "basic",
-            iconUrl: chrome.runtime.getURL("assets/icons/icon128.png"),
-            title: `[${g.league.toUpperCase()}] ${title}`,
-            message: body,
-            priority: 1,
-          }
-        );
+        // chrome.notifications.create(
+        //   `ss-${gameKey(g)}-${g.home.score}-${g.away.score}`,
+        //   {
+        //     type: "basic",
+        //     iconUrl: chrome.runtime.getURL("assets/icons/icon128.png"),
+        //     title: `[${g.league.toUpperCase()}] ${title}`,
+        //     message: body,
+        //     priority: 1,
+        //   }
+        // );
       }
     }
 
