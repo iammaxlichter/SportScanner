@@ -95,7 +95,7 @@ export default function ScoreBar() {
                 const raw = res.followedTeams ?? res.followed ?? res.teams;
                 setFollowed(normalizeFollowed(raw));
             })
-            .catch(() => {});
+            .catch(() => { });
     }
 
     useEffect(() => {
@@ -186,25 +186,39 @@ export default function ScoreBar() {
     }
 
     useEffect(() => {
-        const handler = (msg: any) => {
+        const handleRefresh = () => {
+            chrome.storage.sync.get(["settings"]).then(({ settings }) => {
+                applySettingsFrom(settings);
+                loadFollowedTeams();
+                const sb = typeof settings?.showBar !== "undefined" ? settings.showBar : showBarRef.current;
+                if (sb) {
+                    setJustRefreshed(true);
+                    setTimeout(() => setJustRefreshed(false), 900);
+                }
+            });
+        };
+
+        const onRuntime = (msg: any) => {
             if (msg?.type === "GAMES_UPDATE") {
                 setGames((msg.games ?? []) as Game[]);
             } else if (msg?.type === "REFRESH_BAR") {
-                chrome.storage.sync.get(["settings"]).then(({ settings }) => {
-                    applySettingsFrom(settings);
-                    // refresh followed teams on a REFRESH_BAR as well
-                    loadFollowedTeams();
-                    const sb = typeof settings?.showBar !== "undefined" ? settings.showBar : showBarRef.current;
-                    if (sb) {
-                        setJustRefreshed(true);
-                        setTimeout(() => setJustRefreshed(false), 900);
-                    }
-                });
+                handleRefresh();
             }
         };
-        chrome.runtime.onMessage.addListener(handler);
-        return () => chrome.runtime.onMessage.removeListener(handler);
+
+        const onStorage = (changes: { [k: string]: chrome.storage.StorageChange }, area: string) => {
+            if (area !== "local") return;
+            if (changes.__ss_refresh_bar) handleRefresh();
+        };
+
+        chrome.runtime.onMessage.addListener(onRuntime);
+        chrome.storage.onChanged.addListener(onStorage);
+        return () => {
+            chrome.runtime.onMessage.removeListener(onRuntime);
+            chrome.storage.onChanged.removeListener(onStorage);
+        };
     }, []);
+
 
     type Anchor = "auto" | "free";
     const [anchor, setAnchor] = useState<Anchor>("auto");

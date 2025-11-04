@@ -1,4 +1,3 @@
-// src/background/index.ts
 /// <reference types="chrome" />
 import type { Game } from "../lib/types";
 import { gameKey, fetchLiveGamesForFollowed } from "../lib/api";
@@ -48,7 +47,7 @@ async function pollOnce() {
           `ss-${gameKey(g)}-${g.home.score}-${g.away.score}`,
           {
             type: "basic",
-            iconUrl: "icons/icon128.png",
+            iconUrl: chrome.runtime.getURL("assets/icons/icon128.png"),
             title: `[${g.league.toUpperCase()}] ${title}`,
             message: body,
             priority: 1,
@@ -94,9 +93,12 @@ async function broadcast(msg: any) {
 }
 
 /**
- * Ask content scripts to refresh via a storage ping (replaces tabs.query fan-out).
+ * Poke content scripts to refresh via runtime message, and also mirror to storage.
  */
 async function broadcastRefresh(reason?: string) {
+  try {
+    chrome.runtime.sendMessage({ type: "REFRESH_BAR", reason: reason ?? "settings_updated" });
+  } catch {}
   try {
     await chrome.storage.local.set({
       __ss_refresh_bar: { reason: reason ?? "settings_updated", at: Date.now() },
@@ -108,10 +110,8 @@ async function broadcastRefresh(reason?: string) {
 async function init() {
   console.log("[SportScanner] service worker loaded");
 
-  // Alarms lifecycle (centralized in ./alarms)
   initAlarms(pollOnce);
 
-  // Messaging glue (centralized in ./messaging)
   initMessaging({
     getSnapshot,
     onSettingsUpdated: async () => {
@@ -120,6 +120,11 @@ async function init() {
     },
     setBadgeText,
     broadcastRefresh,
+    refreshNow: async () => {
+      await pollOnce();
+      await broadcast({ type: "GAMES_UPDATE", games: lastGames });
+      await broadcastRefresh("refresh_now");
+    },
   });
 
   await rescheduleAlarms();
