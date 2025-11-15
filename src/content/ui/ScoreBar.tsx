@@ -186,6 +186,17 @@ export default function ScoreBar() {
     }
 
     useEffect(() => {
+        chrome.storage.sync
+            .get(["settings"])
+            .then(({ settings }) => {
+                applySettingsFrom(settings);
+            })
+            .catch(() => {
+               
+            });
+    }, []);
+
+    useEffect(() => {
         const handler = (msg: any) => {
             if (msg?.type === "GAMES_UPDATE") {
                 setGames((msg.games ?? []) as Game[]);

@@ -1,1 +1,5 @@
-When there is a team selected but they don't play today, the drag bar still shows when it shouldnt
+- Whenever you turn off the bar, and then go into a new tab, 
+the bar appears again, but in the popup, it says it's off. To turn it off 
+again, you just turn the the turn bar off and on again through the popup,
+but the state of the bar being off/on should remain even when making new 
+tabs. FIXED
