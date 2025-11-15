@@ -245,7 +245,7 @@ export default function Popup() {
         </section>
 
         <footer className="pp-footer">
-          <span>v0.1.2</span>
+          <span>v0.1.3</span>
           <button type="button" className="pp-link" onClick={resetPosition} title="Recenter the bar">
             Reset position
           </button>

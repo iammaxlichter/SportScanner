@@ -2,7 +2,7 @@
     "manifest_version": 3,
     "name": "SportScanner",
     "description": "Track live scores of your favorite teams in a bar.",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "action": {
         "default_popup": "popup.html",
         "default_icon": {
